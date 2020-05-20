@@ -21,14 +21,24 @@
  * 5) in general queries need to be optimized most imo
  */
 
-
 #ifdef FHT_STATS
+uint64_t nadd        = 0;
+uint64_t success_add = 0;
+uint64_t fail_add    = 0;
+
+uint64_t nfind        = 0;
+uint64_t success_find = 0;
+uint64_t fail_find    = 0;
+
 uint64_t niter_add    = 0;
 uint64_t natt_add     = 0;
 uint64_t niter_resize = 0;
 uint64_t natt_resize  = 0;
 uint64_t niter_find   = 0;
 uint64_t natt_find    = 0;
+
+uint64_t tag_matches       = 0;
+uint64_t false_tag_matches = 0;
 
 uint64_t invalid_resize = 0;
 uint64_t deleted_resize = 0;
@@ -37,6 +47,7 @@ uint64_t good_resize    = 0;
 #else
 #define FHT_STATS_INCR(X)
 #endif
+
 
 //////////////////////////////////////////////////////////////////////
 // These are basically variable for cache alignment
@@ -68,7 +79,7 @@ uint64_t good_resize    = 0;
 
 // for calculating IDX from tag
 #define IDX_MASK   (FHT_CACHE_IDX_MASK)
-#define GET_IDX(X) (XOR_IDX((X) >> NEXT_HASH_OFFSET))
+#define GET_IDX(X) raw_slot  //(XOR_IDX((X) >> NEXT_HASH_OFFSET))
 
 // if we have 1 byte tags this is enough
 #if FHT_LOG_TAG_TYPE_SIZE == 0
@@ -97,7 +108,7 @@ uint64_t good_resize    = 0;
 
 // tunable parameter determine how often need to rehash. REQ_UNIQUE... is
 // basically how many bits in tag need be unknown assuming a table idx
-#define REQ_UNIQUE_TAG_BITS (5)
+#define REQ_UNIQUE_TAG_BITS (6)
 #define REHASH_THRESH                                                          \
     (sizeof_bits(tag_type_t) - (REQ_UNIQUE_TAG_BITS + NEXT_HASH_OFFSET))
 //////////////////////////////////////////////////////////////////////
@@ -368,8 +379,8 @@ resize(flat_hashtable_t * table) {
     // set things const properly compiler does a good job about what actually
     // need a register vs what should be recomputed on the fly vs stored in
     // memory (on the stack)
-    const flat_chunk_t * const old_chunks    = table->chunks;
-    flat_chunk_t * const       new_chunk_arr = (flat_chunk_t *)mymmap_alloc(
+    const flat_chunk_t * const old_chunks = table->chunks;
+    flat_chunk_t * const       new_chunks = (flat_chunk_t *)mymmap_alloc(
         ((1 << (_log_init_size + _new_log_incr)) / FHT_NODES_PER_CACHE_LINE) *
         sizeof(flat_chunk_t));
 
@@ -382,15 +393,12 @@ resize(flat_hashtable_t * table) {
         const tag_type_t * const tags  = old_chunks[i].tags;
 
         // since we are adding 1 new bit 2 options for next chunk
-        fht_node_t * const new_nodes[2] = {
-            new_chunk_arr[i].nodes,
-            new_chunk_arr[i + _num_chunks].nodes
-        };
+        fht_node_t * const new_nodes[2] = { new_chunks[i].nodes,
+                                            new_chunks[i + _num_chunks].nodes };
 
-        tag_type_t * const new_tags[2] = {
-            new_chunk_arr[i].tags,
-            new_chunk_arr[i + _num_chunks].tags
-        };
+        tag_type_t * const new_tags[2] = { new_chunks[i].tags,
+                                           new_chunks[i + _num_chunks].tags };
+
 
         // same as above counter
         uint32_t internal_nnode_counter = 0;
@@ -419,11 +427,13 @@ resize(flat_hashtable_t * table) {
             uint32_t start_idx;
             uint32_t next_hash_bit;
             if (_new_log_incr < REHASH_THRESH) {
-                // use whats stored
+// use whats stored
+#if 0
                 ltag          = tags[j];
                 start_idx     = GET_IDX(ltag);
                 next_hash_bit = GET_NEXT_HASH_BIT(ltag, _old_log_incr);
                 assert(!!next_hash_bit == next_hash_bit);
+#endif
             }
             else {
                 // recalculate
@@ -447,9 +457,9 @@ resize(flat_hashtable_t * table) {
 /* possible a faster way to select chunks */
 #if 0
             tag_type_t * const new_tags =
-                new_chunk_arr[i + (next_hash_bit ? _num_chunks : 0)].tags;
-            tag_type_t * const new_nodes =
-                new_chunk_arr[i + (next_hash_bit ? _num_chunks : 0)].nodes;
+                new_chunks[i + (next_hash_bit ? _num_chunks : 0)].tags;
+            fht_node_t * const new_nodes =
+                new_chunks[i + (next_hash_bit ? _num_chunks : 0)].nodes;
 #endif
 
             FHT_STATS_INCR(natt_resize);
@@ -482,16 +492,16 @@ resize(flat_hashtable_t * table) {
         if (internal_nnode_counter) {
             fprintf(stderr, "Error(%d) IDX(%d)\n", internal_nnode_counter, i);
             print_chunk("Old_Chunk", (flat_chunk_t *)(old_chunks + i), i);
-            print_chunk("New_Chunk[0]", new_chunk_arr + i, i);
+            print_chunk("New_Chunk[0]", new_chunks + i, i);
             print_chunk("New_Chunk[1]",
-                        new_chunk_arr + i + _num_chunks,
+                        new_chunks + i + _num_chunks,
                         i + _num_chunks);
         }
         assert(!internal_nnode_counter);
     }
 
     assert(!nnode_counter);
-    table->chunks = new_chunk_arr;
+    table->chunks = new_chunks;
 
     // update "log_init_size"  and log_incr if we rehashed. Basically you can
     // think of log_init_size is log of last size that we hashed and incr how
@@ -506,6 +516,7 @@ resize(flat_hashtable_t * table) {
 // good will make type T and c++
 int32_t
 fht_add_key(flat_hashtable_t * table, fht_key_t new_key, fht_val_t new_val) {
+    FHT_STATS_INCR(nadd);
     const uint32_t _log_init_size = table->log_init_size;
     const uint32_t _log_incr      = table->log_incr;
 
@@ -545,18 +556,23 @@ fht_add_key(flat_hashtable_t * table, fht_key_t new_key, fht_val_t new_val) {
         if (!IS_VALID(tags[test_idx])) {
             tags[test_idx] = (tag | VALID_FLAG);
             set_key_val(nodes[test_idx], new_key, new_val);
+            FHT_STATS_INCR(success_add);
             return FHT_ADDED;
         }
 
         // elseif it is valid and tags match compare actual keys
         else if ((GET_CONTENT(tags[test_idx]) == tag)) {
+            FHT_STATS_INCR(tag_matches);
             if (compare_keys(fht_get_key(nodes[test_idx]), new_key) == EQUALS) {
                 if (IS_DELETED(tags[test_idx])) {
                     SET_UNDELETED(tags[test_idx]);
+                    FHT_STATS_INCR(success_add);
                     return FHT_ADDED;
                 }
+                FHT_STATS_INCR(fail_add);
                 return FHT_NOT_ADDED;
             }
+            FHT_STATS_INCR(false_tag_matches);
         }
     }
 
@@ -576,12 +592,14 @@ fht_add_key(flat_hashtable_t * table, fht_key_t new_key, fht_val_t new_val) {
     const uint32_t   new_start_idx = GET_IDX(new_tag);
 
     FHT_STATS_INCR(natt_add);
+    __builtin_prefetch(chunk->nodes + ((start_idx)&FHT_CACHE_IDX_MASK));
     for (uint32_t j = 0; j < FHT_SEARCH_NUMBER; j++) {
         FHT_STATS_INCR(niter_add);
         const uint32_t test_idx = (new_start_idx + j) & FHT_CACHE_IDX_MASK;
         if (!IS_VALID(new_tags[test_idx])) {
             new_tags[test_idx] = (new_tag | VALID_FLAG);
             set_key_val(new_nodes[test_idx], new_key, new_val);
+            FHT_STATS_INCR(success_add);
             return FHT_ADDED;
         }
     }
@@ -598,6 +616,7 @@ fht_add_key(flat_hashtable_t * table, fht_key_t new_key, fht_val_t new_val) {
 
 int32_t
 fht_find_key(flat_hashtable_t * table, fht_key_t key) {
+    FHT_STATS_INCR(nfind);
     const uint32_t _log_init_size = table->log_init_size;
     const uint32_t _log_incr      = table->log_incr;
 
@@ -615,25 +634,29 @@ fht_find_key(flat_hashtable_t * table, fht_key_t key) {
     tag_type_t * const tags  = chunk->tags;
     fht_node_t * const nodes = chunk->nodes;
     FHT_STATS_INCR(natt_find);
+    __builtin_prefetch(chunk->nodes + (start_idx & FHT_CACHE_IDX_MASK));
     for (uint32_t j = 0; j < FHT_SEARCH_NUMBER; j++) {
         FHT_STATS_INCR(niter_find);
         const uint32_t test_idx = (start_idx + j) & FHT_CACHE_IDX_MASK;
 
-
         if (!IS_VALID(tags[test_idx])) {
+            FHT_STATS_INCR(fail_find);
             return FHT_NOT_FOUND;
         }
-        else if (IS_VALID(tags[test_idx]) &&
-                 (GET_CONTENT(tags[test_idx]) == tag)) {
+        else if ((GET_CONTENT(tags[test_idx]) == tag)) {
+            FHT_STATS_INCR(tag_matches);
             if (compare_keys(fht_get_key(nodes[test_idx]), key) == EQUALS) {
-
                 if (IS_DELETED(tags[test_idx])) {
+                    FHT_STATS_INCR(fail_find);
                     return FHT_NOT_FOUND;
                 }
+                FHT_STATS_INCR(success_find);
                 return FHT_FOUND;
             }
+            FHT_STATS_INCR(false_tag_matches);
         }
     }
+    FHT_STATS_INCR(fail_find);
     return FHT_NOT_FOUND;
 }
 
@@ -647,24 +670,24 @@ fht_delete_key(flat_hashtable_t * table, fht_key_t key) {
     const uint32_t chunk_mask =
         TO_MASK(_log_init_size + _log_incr) & FHT_CACHE_ALIGN_MASK;
 
-    const uint32_t   raw_slot  = hash_fht_key(key);
-    const tag_type_t tag       = gen_tag(raw_slot, _log_init_size);
-    const uint32_t   start_idx = GET_IDX(tag);
-
+    const uint32_t       raw_slot  = hash_fht_key(key);
+    const tag_type_t     tag       = gen_tag(raw_slot, _log_init_size);
+    const uint32_t       start_idx = GET_IDX(tag);
     flat_chunk_t * const chunk =
         (table->chunks) + ((raw_slot & chunk_mask) / FHT_NODES_PER_CACHE_LINE);
 
     tag_type_t * const tags  = chunk->tags;
     fht_node_t * const nodes = chunk->nodes;
 
+    __builtin_prefetch(chunk->nodes + ((start_idx)&FHT_CACHE_IDX_MASK));
     for (uint32_t j = 0; j < FHT_SEARCH_NUMBER; j++) {
         const uint32_t test_idx = (start_idx + j) & FHT_CACHE_IDX_MASK;
 
         if (!IS_VALID(tags[test_idx])) {
             return FHT_NOT_DELETED;
         }
-        else if (IS_VALID(tags[test_idx]) &&
-                 (GET_CONTENT(tags[test_idx]) == tag)) {
+        else if ((GET_CONTENT(tags[test_idx]) == tag)) {
+            FHT_STATS_INCR(tag_matches);
             if (compare_keys(fht_get_key(nodes[test_idx]), key) == EQUALS) {
                 if (IS_DELETED(tags[test_idx])) {
                     return FHT_NOT_DELETED;
@@ -672,6 +695,7 @@ fht_delete_key(flat_hashtable_t * table, fht_key_t key) {
                 SET_DELETED(tags[test_idx]);
                 return FHT_DELETED;
             }
+            FHT_STATS_INCR(false_tag_matches);
         }
     }
     return FHT_NOT_DELETED;

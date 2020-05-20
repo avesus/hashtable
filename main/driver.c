@@ -32,12 +32,22 @@ static ArgOption args[] = {
 static ArgDefs argp = { args, "Main", Version, NULL };
 
 #ifdef FHT_STATS
+extern uint64_t nadd;
+extern uint64_t success_add;
+extern uint64_t fail_add;
+extern uint64_t nfind;
+extern uint64_t success_find;
+extern uint64_t fail_find;
+
 extern uint64_t niter_add;
 extern uint64_t natt_add;
 extern uint64_t niter_resize;
 extern uint64_t natt_resize;
 extern uint64_t niter_find;
 extern uint64_t natt_find;
+
+extern uint64_t tag_matches;
+extern uint64_t false_tag_matches;
 
 extern uint64_t invalid_resize;
 extern uint64_t deleted_resize;
@@ -89,7 +99,7 @@ main(int argc, char ** argv) {
     for (uint32_t i = 0; i < FHT_TEST_SIZE * Q_PER_INS; i++) {
         test_keys[i] = test_nodes[random() % FHT_TEST_SIZE].key;
     }
-    
+
     if (which_table == OUR_TABLE) {
         flat_hashtable_t * table = fht_init_table(1 << init_size);
 
@@ -118,14 +128,32 @@ main(int argc, char ** argv) {
     clock_gettime(CLOCK_MONOTONIC, &end);
 #ifdef FHT_STATS
     fprintf(stderr,
-            "Add : %.3lf\nRes : %.3lf\n\tInv : %lu\n\tDel : %lu\n\tGood: "
-            "%lu\nFind: %.3lf\n",
+            "Match: %.3lf\n"
+            "Nadd : %lu\n\t\t"
+            "LAdd : %.3lf\n\t\t"
+            "FAdd : %.3lf\n\t\t"
+            "SAdd : %.3lf\n"
+            "Nfind: %lu\n\t\t"
+            "LFind: %.3lf\n\t\t"
+            "FFind: %.3lf\n\t\t"
+            "SFind: %.3lf\n"
+            "Res  : %.3lf\n\t\t"
+            "Inv  : %lu\n\t\t"
+            "Del  : %lu\n\t\t"
+            "Good : %lu\n",
+            udiv(false_tag_matches, tag_matches),
+            nadd,
             udiv(niter_add, natt_add),
+            udiv(fail_add, nadd),
+            udiv(success_add, nadd),
+            nfind,
+            udiv(niter_find, natt_find),
+            udiv(fail_find, nfind),
+            udiv(success_find, nfind),
             udiv(niter_resize, natt_resize),
             invalid_resize,
             deleted_resize,
-            good_resize,
-            udiv(niter_find, natt_find));
+            good_resize);
 #endif
 
     fprintf(stderr,
