@@ -8,7 +8,7 @@ BIN_DIR=${CURDIR}/bin
 
 #set debug mode, all the options because typing "DEBUG_MODE" or
 #"DEBUG" might be cumbersome ...
-D=1
+D=0
 DEBUG=0
 DEBUG_MODE=0
 ifneq ($(D), 0)

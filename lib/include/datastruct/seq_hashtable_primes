@@ -6,7 +6,6 @@
 
 // turn on for some trivial stats collection
 #define FHT_STATS
-#define FHT_ALWAYS_REHASH
 //////////////////////////////////////////////////////////////////////
 //....
 #define DEFAULT_INIT_FHT_SIZE PAGE_SIZE
@@ -66,10 +65,7 @@ typedef struct flat_chunk {
 // hashtable...
 typedef struct flat_hashtable {
     flat_chunk_t * chunks;
-#ifndef FHT_ALWAYS_REHASH
-    uint32_t       log_init_size;
-#endif
-    uint32_t       log_incr;
+    uint32_t       size_idx;
 } flat_hashtable_t;
 
 

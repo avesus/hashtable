@@ -338,6 +338,7 @@ correct_test() {
         }
         for (uint32_t i = 0; i < FHT_TEST_SIZE; i++) {
             if (taken[test_nodes[i + FHT_TEST_SIZE].key - (1 << 25)] == 1) {
+                assert(fht_find_key(table, test_nodes[i + FHT_TEST_SIZE].key) == FHT_FOUND);
                 assert(
                     fht_delete_key(table, test_nodes[i + FHT_TEST_SIZE].key) ==
                     FHT_DELETED);
