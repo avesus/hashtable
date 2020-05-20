@@ -1,0 +1,268 @@
+[
+    {
+        "arguments": [
+            "c++",
+            "-c",
+            "-O0",
+            "-std=c++11",
+            "-Wall",
+            "-Wno-pointer-arith",
+            "-Wno-unused-function",
+            "-g3",
+            "-DDEBUG",
+            "-D_GNU_SOURCE",
+            "-I/home/noah/programs/mylib/config",
+            "-I/home/noah/programs/mylib/lib/include/",
+            "src/helpers/cycles.c"
+        ],
+        "directory": "/home/noah/programs/mylib/lib",
+        "file": "src/helpers/cycles.c"
+    },
+    {
+        "arguments": [
+            "c++",
+            "-c",
+            "-O0",
+            "-std=c++11",
+            "-Wall",
+            "-Wno-pointer-arith",
+            "-Wno-unused-function",
+            "-g3",
+            "-DDEBUG",
+            "-D_GNU_SOURCE",
+            "-I/home/noah/programs/mylib/config",
+            "-I/home/noah/programs/mylib/lib/include/",
+            "src/helpers/opt.c"
+        ],
+        "directory": "/home/noah/programs/mylib/lib",
+        "file": "src/helpers/opt.c"
+    },
+    {
+        "arguments": [
+            "c++",
+            "-c",
+            "-O0",
+            "-std=c++11",
+            "-Wall",
+            "-Wno-pointer-arith",
+            "-Wno-unused-function",
+            "-g3",
+            "-DDEBUG",
+            "-D_GNU_SOURCE",
+            "-I/home/noah/programs/mylib/config",
+            "-I/home/noah/programs/mylib/lib/include/",
+            "src/helpers/bits.c"
+        ],
+        "directory": "/home/noah/programs/mylib/lib",
+        "file": "src/helpers/bits.c"
+    },
+    {
+        "arguments": [
+            "c++",
+            "-c",
+            "-O0",
+            "-std=c++11",
+            "-Wall",
+            "-Wno-pointer-arith",
+            "-Wno-unused-function",
+            "-g3",
+            "-DDEBUG",
+            "-D_GNU_SOURCE",
+            "-I/home/noah/programs/mylib/config",
+            "-I/home/noah/programs/mylib/lib/include/",
+            "driver.c"
+        ],
+        "directory": "/home/noah/programs/mylib/main",
+        "file": "driver.c"
+    },
+    {
+        "arguments": [
+            "c++",
+            "-c",
+            "-O0",
+            "-std=c++11",
+            "-Wall",
+            "-Wno-pointer-arith",
+            "-Wno-unused-function",
+            "-g3",
+            "-DDEBUG",
+            "-D_GNU_SOURCE",
+            "-I/home/noah/programs/mylib/config",
+            "-I/home/noah/programs/mylib/lib/include/",
+            "src/local/hashtable.c"
+        ],
+        "directory": "/home/noah/programs/mylib/lib",
+        "file": "src/local/hashtable.c"
+    },
+    {
+        "arguments": [
+            "c++",
+            "-c",
+            "-O0",
+            "-std=c++11",
+            "-Wall",
+            "-Wno-pointer-arith",
+            "-Wno-unused-function",
+            "-g3",
+            "-DDEBUG",
+            "-D_GNU_SOURCE",
+            "-I/home/noah/programs/mylib/config",
+            "-I/home/noah/programs/mylib/lib/include/",
+            "src/helpers/debug.c"
+        ],
+        "directory": "/home/noah/programs/mylib/lib",
+        "file": "src/helpers/debug.c"
+    },
+    {
+        "arguments": [
+            "c++",
+            "-c",
+            "-O0",
+            "-std=c++11",
+            "-Wall",
+            "-Wno-pointer-arith",
+            "-Wno-unused-function",
+            "-g3",
+            "-DDEBUG",
+            "-D_GNU_SOURCE",
+            "-I/home/noah/programs/mylib/config",
+            "-I/home/noah/programs/mylib/lib/include/",
+            "src/helpers/temp_barrier.c"
+        ],
+        "directory": "/home/noah/programs/mylib/lib",
+        "file": "src/helpers/temp_barrier.c"
+    },
+    {
+        "arguments": [
+            "c++",
+            "-c",
+            "-O0",
+            "-std=c++11",
+            "-Wall",
+            "-Wno-pointer-arith",
+            "-Wno-unused-function",
+            "-g3",
+            "-DDEBUG",
+            "-D_GNU_SOURCE",
+            "-I/home/noah/programs/mylib/config",
+            "-I/home/noah/programs/mylib/lib/include/",
+            "src/datastruct/arrlist.c"
+        ],
+        "directory": "/home/noah/programs/mylib/lib",
+        "file": "src/datastruct/arrlist.c"
+    },
+    {
+        "arguments": [
+            "c++",
+            "-c",
+            "-O0",
+            "-std=c++11",
+            "-Wall",
+            "-Wno-pointer-arith",
+            "-Wno-unused-function",
+            "-g3",
+            "-DDEBUG",
+            "-D_GNU_SOURCE",
+            "-I/home/noah/programs/mylib/config",
+            "-I/home/noah/programs/mylib/lib/include/",
+            "src/helpers/clock.c"
+        ],
+        "directory": "/home/noah/programs/mylib/lib",
+        "file": "src/helpers/clock.c"
+    },
+    {
+        "arguments": [
+            "c++",
+            "-c",
+            "-O0",
+            "-std=c++11",
+            "-Wall",
+            "-Wno-pointer-arith",
+            "-Wno-unused-function",
+            "-g3",
+            "-DDEBUG",
+            "-D_GNU_SOURCE",
+            "-I/home/noah/programs/mylib/config",
+            "-I/home/noah/programs/mylib/lib/include/",
+            "src/helpers/arg.c"
+        ],
+        "directory": "/home/noah/programs/mylib/lib",
+        "file": "src/helpers/arg.c"
+    },
+    {
+        "arguments": [
+            "c++",
+            "-c",
+            "-O0",
+            "-std=c++11",
+            "-Wall",
+            "-Wno-pointer-arith",
+            "-Wno-unused-function",
+            "-g3",
+            "-DDEBUG",
+            "-D_GNU_SOURCE",
+            "-I/home/noah/programs/mylib/config",
+            "-I/home/noah/programs/mylib/lib/include/",
+            "src/helpers/temp.c"
+        ],
+        "directory": "/home/noah/programs/mylib/lib",
+        "file": "src/helpers/temp.c"
+    },
+    {
+        "arguments": [
+            "c++",
+            "-c",
+            "-O0",
+            "-std=c++11",
+            "-Wall",
+            "-Wno-pointer-arith",
+            "-Wno-unused-function",
+            "-g3",
+            "-DDEBUG",
+            "-D_GNU_SOURCE",
+            "-I/home/noah/programs/mylib/config",
+            "-I/home/noah/programs/mylib/lib/include/",
+            "src/helpers/locks.c"
+        ],
+        "directory": "/home/noah/programs/mylib/lib",
+        "file": "src/helpers/locks.c"
+    },
+    {
+        "arguments": [
+            "c++",
+            "-c",
+            "-O0",
+            "-std=c++11",
+            "-Wall",
+            "-Wno-pointer-arith",
+            "-Wno-unused-function",
+            "-g3",
+            "-DDEBUG",
+            "-D_GNU_SOURCE",
+            "-I/home/noah/programs/mylib/config",
+            "-I/home/noah/programs/mylib/lib/include/",
+            "src/local/core.c"
+        ],
+        "directory": "/home/noah/programs/mylib/lib",
+        "file": "src/local/core.c"
+    },
+    {
+        "arguments": [
+            "c++",
+            "-c",
+            "-O0",
+            "-std=c++11",
+            "-Wall",
+            "-Wno-pointer-arith",
+            "-Wno-unused-function",
+            "-g3",
+            "-DDEBUG",
+            "-D_GNU_SOURCE",
+            "-I/home/noah/programs/mylib/config",
+            "-I/home/noah/programs/mylib/lib/include/",
+            "src/helpers/util.c"
+        ],
+        "directory": "/home/noah/programs/mylib/lib",
+        "file": "src/helpers/util.c"
+    }
+]
