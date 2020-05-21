@@ -52,7 +52,7 @@ uint64_t good_resize    = 0;
 
 //////////////////////////////////////////////////////////////////////
 // These are basically variable for cache alignment
-#define FHT_NODES_PER_CACHE_LINE (L1_CACHE_LINE_SIZE / sizeof(tag_type_t))
+#define FHT_NODES_PER_CACHE_LINE ((L1_CACHE_LINE_SIZE / sizeof(tag_type_t)))
 #define FHT_LOG_NODES_PER_CACHE_LINE                                           \
     (L1_LOG_CACHE_LINE_SIZE - FHT_LOG_TAG_TYPE_SIZE)
 #define FHT_CACHE_IDX_MASK   (FHT_NODES_PER_CACHE_LINE - 1)
@@ -68,6 +68,9 @@ uint64_t good_resize    = 0;
 // valid / invalid bits in the tag
 #define VALID_FLAG  (0x1)
 #define DELETE_FLAG (0x2)
+// delete flag + valid_flag
+#define NEXT_HASH_OFFSET        (1 + 1)
+#define GET_NEXT_HASH_BIT(X, Y) (((X) >> (NEXT_HASH_OFFSET + (Y))) & 0x1)
 
 #define IS_VALID(X)    ((X)&VALID_FLAG)
 #define SET_VALID(X)   ((X) |= VALID_FLAG)
@@ -79,9 +82,10 @@ uint64_t good_resize    = 0;
 
 // for calculating IDX from tag
 
-#define IDX_MASK (FHT_CACHE_IDX_MASK)
+#define N_IDX_BITS (sizeof_bits(tag_type_t) - NEXT_HASH_OFFSET)
+#define IDX_MASK (TO_MASK(N_IDX_BITS))
 #ifdef FHT_ALWAYS_REHASH
-#define GET_IDX(X) (raw_slot >> (32 - FHT_LOG_NODES_PER_CACHE_LINE))
+#define GET_IDX(X) (raw_slot >> (32 - N_IDX_BITS))
 #else
 #define GET_IDX(X) (XOR_IDX((X) >> NEXT_HASH_OFFSET))
 #endif
@@ -125,9 +129,6 @@ uint64_t good_resize    = 0;
 #define TO_J_VAL(X)        (3 * (X))
 #define GEN_TEST_IDX(X, Y) (((X) ^ TO_J_VAL(Y)) & FHT_CACHE_IDX_MASK);
 
-// delete flag + valid_flag
-#define NEXT_HASH_OFFSET        (1 + 1)
-#define GET_NEXT_HASH_BIT(X, Y) (((X) >> (NEXT_HASH_OFFSET + (Y))) & 0x1)
 
 // tunable parameter determine how often need to rehash. REQ_UNIQUE... is
 // basically how many bits in tag need be unknown assuming a table idx
@@ -144,10 +145,11 @@ uint64_t good_resize    = 0;
     fht_get_key((X)) = (Y);                                                    \
     fht_get_val((X)) = (Z)
 
+#define compare_keys(X, Y) ((X) == (Y))
 #define EQUALS     1
 #define NOT_EQUALS 0
 static uint32_t
-compare_keys(fht_key_t a, fht_key_t b) {
+compare_keys_func(fht_key_t a, fht_key_t b) {
     return a == b;
 }
 
@@ -211,7 +213,6 @@ murmur_32_4(const uint32_t key, uint32_t seed) {
     h ^= k;
     h = (h << 13) | (h >> 19);
     h = h * 5 + 0xe6546b64;
-
 
     h ^= 4;
     h ^= h >> 16;
@@ -396,14 +397,6 @@ resize(flat_hashtable_t * table) {
 
     const uint32_t _new_log_incr = ++(table->log_incr);
 
-    // num chunks to iterate through
-#ifndef FHT_ALWAYS_REHASH
-    const uint32_t _num_chunks =
-        (1 << (_log_init_size + _old_log_incr)) / FHT_NODES_PER_CACHE_LINE;
-#else
-    const uint32_t _num_chunks =
-        (1 << (_new_log_incr - 1)) / FHT_NODES_PER_CACHE_LINE;
-#endif
 
     // just some const variables. to make life easier. Recently decided if you
     // set things const properly compiler does a good job about what actually
@@ -418,6 +411,16 @@ resize(flat_hashtable_t * table) {
     flat_chunk_t * const new_chunks = (flat_chunk_t *)mymmap_alloc(
         ((1 << (_new_log_incr)) / FHT_NODES_PER_CACHE_LINE) *
         sizeof(flat_chunk_t));
+#endif
+
+
+        // num chunks to iterate through
+#ifndef FHT_ALWAYS_REHASH
+    const uint32_t _num_chunks =
+        (1 << (_log_init_size + _old_log_incr)) / FHT_NODES_PER_CACHE_LINE;
+#else
+    const uint32_t _num_chunks =
+        (1 << (_new_log_incr - 1)) / FHT_NODES_PER_CACHE_LINE;
 #endif
 
 #ifdef FHT_HASH_ATTEMPTS
@@ -441,6 +444,7 @@ resize(flat_hashtable_t * table) {
 
         tag_type_t * const new_tags[2] = { new_chunks[i].tags,
                                            new_chunks[i + _num_chunks].tags };
+
 #endif
 
         // same as above counter
@@ -482,9 +486,10 @@ resize(flat_hashtable_t * table) {
                 const uint32_t next_hash_bit =
                     (raw_slot >> (_new_log_incr - 1) & 0x1);
 #endif
-                const uint32_t ltag =
+                const tag_type_t ltag =
                     gen_tag(raw_slot, _new_log_incr) | VALID_FLAG;
                 const uint32_t start_idx = GET_IDX(ltag);
+                
 
 #else
             uint32_t ltag;
@@ -530,7 +535,7 @@ resize(flat_hashtable_t * table) {
                                 FHT_NODES_PER_CACHE_LINE)]
                         .nodes;
 #endif
-
+                
 
                 FHT_STATS_INCR(natt_resize);
 
@@ -575,7 +580,7 @@ resize(flat_hashtable_t * table) {
 #endif
         }
         // debugging....
-            #ifdef DEBUG
+#ifdef DEBUG
         if (internal_nnode_counter) {
             fprintf(stderr, "Error(%d) IDX(%d)\n", internal_nnode_counter, i);
             print_chunk("Old_Chunk", (flat_chunk_t *)(old_chunks + i), i);
@@ -585,7 +590,7 @@ resize(flat_hashtable_t * table) {
                         i + _num_chunks);
         }
         assert(!internal_nnode_counter);
-        #endif
+#endif
     }
 #ifdef DEBUG
     assert(!nnode_counter);
@@ -597,9 +602,14 @@ resize(flat_hashtable_t * table) {
     // many resizes since then.
 
 #ifdef FHT_ALWAYS_REHASH
-    mymunmap((void *)old_chunks, ((1 << (_new_log_incr - 1)) / FHT_NODES_PER_CACHE_LINE) * sizeof(flat_chunk_t));
+    mymunmap((void *)old_chunks,
+             ((1 << (_new_log_incr - 1)) / FHT_NODES_PER_CACHE_LINE) *
+                 sizeof(flat_chunk_t));
 #else
-    mymunmap((void *)old_chunks, ((1 << (_log_init_size + _new_log_incr - 1)) / FHT_NODES_PER_CACHE_LINE) * sizeof(flat_chunk_t));
+    mymunmap((void *)old_chunks,
+             ((1 << (_log_init_size + _new_log_incr - 1)) /
+              FHT_NODES_PER_CACHE_LINE) *
+                 sizeof(flat_chunk_t));
     if (_new_log_incr >= REHASH_THRESH) {
         table->log_init_size = _log_init_size + _new_log_incr;
         table->log_incr      = 0;
@@ -616,7 +626,8 @@ fht_add_key(flat_hashtable_t * table, fht_key_t new_key, fht_val_t new_val) {
 #ifndef FHT_ALWAYS_REHASH
     const uint32_t _log_init_size = table->log_init_size;
 #endif
-    const uint32_t _log_incr = table->log_incr;
+    const uint32_t       _log_incr = table->log_incr;
+    flat_chunk_t * const chunks    = table->chunks;
 
     // this mask drops lower bits for getting proper chunk
 #ifndef FHT_ALWAYS_REHASH
@@ -639,18 +650,16 @@ fht_add_key(flat_hashtable_t * table, fht_key_t new_key, fht_val_t new_val) {
 #endif
         const uint32_t start_idx = GET_IDX(tag);
 
-        // get right chunk
-        flat_chunk_t * const chunk =
-            (table->chunks) +
-            ((raw_slot & chunk_mask) / FHT_NODES_PER_CACHE_LINE);
 
         // get tags/nodes array
-        tag_type_t * const tags  = chunk->tags;
-        fht_node_t * const nodes = chunk->nodes;
+        tag_type_t * const tags = (tag_type_t * const)(
+            (chunks) + ((raw_slot & chunk_mask) / FHT_NODES_PER_CACHE_LINE));
+        fht_node_t * const nodes =
+            (fht_node_t * const)(tags + FHT_NODES_PER_CACHE_LINE);
 
         FHT_STATS_INCR(natt_add);
-        __builtin_prefetch(chunk->nodes + (start_idx & FHT_CACHE_IDX_MASK));
-        __builtin_prefetch(chunk->tags + (start_idx & FHT_CACHE_IDX_MASK));
+        __builtin_prefetch(nodes + (start_idx & FHT_CACHE_IDX_MASK));
+        __builtin_prefetch(tags + (start_idx & FHT_CACHE_IDX_MASK));
         // search through the array.
         for (uint32_t j = 0; j < FHT_SEARCH_NUMBER; j++) {
             FHT_STATS_INCR(niter_add);
@@ -752,8 +761,8 @@ fht_find_key(flat_hashtable_t * table, fht_key_t key) {
 #ifndef FHT_ALWAYS_REHASH
     const uint32_t _log_init_size = table->log_init_size;
 #endif
-    const uint32_t _log_incr = table->log_incr;
-
+    const uint32_t             _log_incr = table->log_incr;
+    const flat_chunk_t * const chunks    = table->chunks;
     // this mask drops lower bits for getting proper chunk
 #ifndef FHT_ALWAYS_REHASH
     const uint32_t chunk_mask =
@@ -776,15 +785,16 @@ fht_find_key(flat_hashtable_t * table, fht_key_t key) {
 #endif
         const uint32_t start_idx = GET_IDX(tag);
 
-        flat_chunk_t * const chunk =
-            (table->chunks) +
-            ((raw_slot & chunk_mask) / FHT_NODES_PER_CACHE_LINE);
+        // get tags/nodes array
+        const tag_type_t * const tags = (const tag_type_t * const)(
+            (chunks) + ((raw_slot & chunk_mask) / FHT_NODES_PER_CACHE_LINE));
+        const fht_node_t * const nodes =
+            (const fht_node_t * const)(tags + FHT_NODES_PER_CACHE_LINE);
 
-        tag_type_t * const tags  = chunk->tags;
-        fht_node_t * const nodes = chunk->nodes;
+        __builtin_prefetch(nodes + (start_idx & FHT_CACHE_IDX_MASK));
+        __builtin_prefetch(tags + (start_idx & FHT_CACHE_IDX_MASK));
+
         FHT_STATS_INCR(natt_find);
-        __builtin_prefetch(chunk->nodes + (start_idx & FHT_CACHE_IDX_MASK));
-        __builtin_prefetch(chunk->tags + (start_idx & FHT_CACHE_IDX_MASK));
         for (uint32_t j = 0; j < FHT_SEARCH_NUMBER; j++) {
             FHT_STATS_INCR(niter_find);
             const uint32_t test_idx = GEN_TEST_IDX(start_idx, j);
@@ -841,16 +851,16 @@ fht_delete_key(flat_hashtable_t * table, fht_key_t key) {
 #else
     const tag_type_t tag        = gen_tag(raw_slot, _log_incr);
 #endif
-        const uint32_t       start_idx = GET_IDX(tag);
-        flat_chunk_t * const chunk =
-            (table->chunks) +
-            ((raw_slot & chunk_mask) / FHT_NODES_PER_CACHE_LINE);
+        const uint32_t start_idx = GET_IDX(tag);
+        // get tags/nodes array
+        tag_type_t * const tags =
+            (tag_type_t * const)((table->chunks) + ((raw_slot & chunk_mask) /
+                                                    FHT_NODES_PER_CACHE_LINE));
+        fht_node_t * const nodes =
+            (fht_node_t * const)(tags + FHT_NODES_PER_CACHE_LINE);
 
-        tag_type_t * const tags  = chunk->tags;
-        fht_node_t * const nodes = chunk->nodes;
-
-        __builtin_prefetch(chunk->nodes + ((start_idx)&FHT_CACHE_IDX_MASK));
-        __builtin_prefetch(chunk->tags + (start_idx & FHT_CACHE_IDX_MASK));
+        __builtin_prefetch(nodes + (start_idx & FHT_CACHE_IDX_MASK));
+        __builtin_prefetch(tags + (start_idx & FHT_CACHE_IDX_MASK));
         for (uint32_t j = 0; j < FHT_SEARCH_NUMBER; j++) {
             const uint32_t test_idx = GEN_TEST_IDX(start_idx, j);
 
