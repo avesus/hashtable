@@ -7,6 +7,8 @@
 // turn on for some trivial stats collection
 #define FHT_STATS
 #define FHT_ALWAYS_REHASH
+
+
 //////////////////////////////////////////////////////////////////////
 //....
 #define DEFAULT_INIT_FHT_SIZE PAGE_SIZE

@@ -61,7 +61,7 @@ uint64_t good_resize    = 0;
 
 // how many searches to try before giving up (I'm keeping as entire line but
 // depending on ALOT of other things thats not always best)
-#define FHT_SEARCH_NUMBER (FHT_NODES_PER_CACHE_LINE - 8)
+#define FHT_SEARCH_NUMBER (FHT_NODES_PER_CACHE_LINE - 24)
 //////////////////////////////////////////////////////////////////////
 #define TO_MASK(X) ((1 << (X)) - 1)
 //////////////////////////////////////////////////////////////////////
@@ -109,6 +109,10 @@ uint64_t good_resize    = 0;
 //#define gen_tag(X, Y) ((((X) >> (Y)) << NEXT_HASH_OFFSET))
 #define gen_tag(X, Y) ((X) << NEXT_HASH_OFFSET)
 
+#define TO_J_VAL(X) (((X) < 16) ? ((X) * (X)) : ((X) * (X) + (X)))
+//#define TO_J_VAL(X) ((X) * (X) + (X))
+#define GEN_TEST_IDX(X, Y) (((X) ^ TO_J_VAL(Y)) & FHT_CACHE_IDX_MASK);
+
 // delete flag + valid_flag
 #define NEXT_HASH_OFFSET        (1 + 1)
 #define GET_NEXT_HASH_BIT(X, Y) (((X) >> (NEXT_HASH_OFFSET + (Y))) & 0x1)
@@ -138,8 +142,8 @@ compare_keys(fht_key_t a, fht_key_t b) {
 
 //////////////////////////////////////////////////////////////////////
 #define hseed           0  // literally doesn't matter
-#define hash_fht_key(X) murmur_32((uint8_t *)(&(X)), fht_get_key_size(X), hseed)
-//#define hash_fht_key(X) murmur_32_4(((X)), hseed)
+//#define hash_fht_key(X) murmur_32((uint8_t *)(&(X)), fht_get_key_size(X), hseed)
+#define hash_fht_key(X) murmur_32_4(((X)), hseed)
 
 // just murmur hash for 32 bit (imo better than 64)
 static uint32_t
@@ -501,8 +505,7 @@ resize(flat_hashtable_t * table) {
             // 1 / (2 ^ FHT_NODES_PER_CACHE_LINE)
             for (uint32_t new_j = 0; new_j < FHT_SEARCH_NUMBER; new_j++) {
                 FHT_STATS_INCR(niter_resize);
-                const uint32_t test_idx =
-                    (start_idx + new_j) & FHT_CACHE_IDX_MASK;
+                const uint32_t test_idx = GEN_TEST_IDX(start_idx, new_j);
 
                 // we dont need to check for matches here (all nodes are by
                 // definition unique) so just find first invalid slot
@@ -582,7 +585,7 @@ fht_add_key(flat_hashtable_t * table, fht_key_t new_key, fht_val_t new_val) {
     fht_node_t * const nodes = chunk->nodes;
 
     FHT_STATS_INCR(natt_add);
-    __builtin_prefetch(chunk->nodes + (start_idx & FHT_CACHE_IDX_MASK));
+    //    __builtin_prefetch(chunk->nodes + (start_idx & FHT_CACHE_IDX_MASK));
     // search through the array.
     for (uint32_t j = 0; j < FHT_SEARCH_NUMBER; j++) {
         FHT_STATS_INCR(niter_add);
@@ -594,7 +597,7 @@ fht_add_key(flat_hashtable_t * table, fht_key_t new_key, fht_val_t new_val) {
         // optimizations harder/impossible (i.e it would be nice if we could
         // O(1) find a valid slot for resize but havent really put much effort
         // into optimizing that yet
-        const uint32_t test_idx = (start_idx + j) & FHT_CACHE_IDX_MASK;
+        const uint32_t test_idx = GEN_TEST_IDX(start_idx, j)
 
         // if block is invalid add there (valid basically means taken).
         if (!IS_VALID(tags[test_idx])) {
@@ -649,7 +652,7 @@ fht_add_key(flat_hashtable_t * table, fht_key_t new_key, fht_val_t new_val) {
 
     for (uint32_t j = 0; j < FHT_SEARCH_NUMBER; j++) {
         FHT_STATS_INCR(niter_add);
-        const uint32_t test_idx = (new_start_idx + j) & FHT_CACHE_IDX_MASK;
+        const uint32_t test_idx = GEN_TEST_IDX(new_start_idx, j);
         if (!IS_VALID(new_tags[test_idx])) {
             new_tags[test_idx] = (new_tag | VALID_FLAG);
             set_key_val(new_nodes[test_idx], new_key, new_val);
@@ -701,7 +704,7 @@ fht_find_key(flat_hashtable_t * table, fht_key_t key) {
     __builtin_prefetch(chunk->nodes + (start_idx & FHT_CACHE_IDX_MASK));
     for (uint32_t j = 0; j < FHT_SEARCH_NUMBER; j++) {
         FHT_STATS_INCR(niter_find);
-        const uint32_t test_idx = (start_idx + j) & FHT_CACHE_IDX_MASK;
+        const uint32_t test_idx = GEN_TEST_IDX(start_idx, j);
 
         if (!IS_VALID(tags[test_idx])) {
             FHT_STATS_INCR(fail_find);
@@ -756,7 +759,7 @@ fht_delete_key(flat_hashtable_t * table, fht_key_t key) {
 
     __builtin_prefetch(chunk->nodes + ((start_idx)&FHT_CACHE_IDX_MASK));
     for (uint32_t j = 0; j < FHT_SEARCH_NUMBER; j++) {
-        const uint32_t test_idx = (start_idx + j) & FHT_CACHE_IDX_MASK;
+        const uint32_t test_idx = GEN_TEST_IDX(start_idx, j);
 
         if (!IS_VALID(tags[test_idx])) {
             return FHT_NOT_DELETED;
