@@ -366,7 +366,7 @@ test_spread() {
 
     // generate primes up to some reasonable value (basically stopping when * 64
     // would overflow)
-    const uint32_t max_prime = 1 << 16;
+    const uint32_t max_prime = 1 << 12;
     uint32_t *     sieve = (uint32_t *)mycalloc(max_prime, sizeof(uint32_t));
 
     uint32_t max_prime_sqrt = (uint32_t)(sqrt((double)max_prime) + 1);
@@ -395,101 +395,231 @@ test_spread() {
     myfree(sieve);
 
 
-    nprimes = iter;
+    nprimes               = iter;
     const uint32_t target = fun_guess;
-    
-    //test linear
-    for(uint32_t i = 0; i < nprimes && 0; i++) {
-        uint64_t mask = 0;
-        for(uint32_t j = 0; j < 64; j++) {
-            if(mask & ((1UL) << ((primes[i] * j) & 63))) {
-                break;
+    for (uint32_t start = 0; start < 64 - target; start++) {
+        // test linear
+        for (uint32_t i = 0; i < nprimes && 0; i++) {
+            uint64_t mask = 0;
+            for (uint32_t j = start; j < 64; j++) {
+                if (mask & ((1UL) << ((primes[i] * j) & 63))) {
+                    break;
+                }
+                mask |= ((1UL) << ((primes[i] * j) & 63));
             }
-            mask |= ((1UL) << ((primes[i] * j) & 63));
-        }
-        if(mask == (~(0UL))) {
-            fprintf(stderr, "Func: %d x\n", primes[i]);
-        }
-    }
-    for(uint32_t i = 0; i < nprimes; i++) {
-        uint64_t mask = 0;
-        for(uint32_t j = 0; j < target; j++) {
-            if(mask & ((1UL) << ((primes[i] * j * j) & 63))) {
-                break;
+            if (mask == (~(0UL))) {
+                fprintf(stderr, "Func(%d): %d x\n", start, primes[i]);
             }
-            mask |= ((1UL) << ((primes[i] * j * j) & 63));
         }
-        if(bitcount_64(mask) == target && i) {
-            fprintf(stderr, "Func: %d x^2\n", primes[i]);
-        }
-    }
-    for(uint32_t i = 0; i < nprimes; i++) {
-        uint64_t mask = 0;
-        for(uint32_t j = 0; j < target; j++) {
-            if(mask & ((1UL) << ((primes[i] * j * j + j) & 63))) {
-                break;
+        for (uint32_t i = 0; i < nprimes; i++) {
+            uint64_t mask = 0;
+            for (uint32_t j = start; j < 64; j++) {
+                if (mask & ((1UL) << ((primes[i] ^ j) & 63))) {
+                    break;
+                }
+                mask |= ((1UL) << ((primes[i] ^ j) & 63));
             }
-            mask |= ((1UL) << ((primes[i] * j * j + j) & 63));
-        }
-        if(bitcount_64(mask) == target && i) {
-            fprintf(stderr, "Func: %d x^2 + x\n", primes[i]);
-        }
-    }
-    for(uint32_t i = 0; i < nprimes; i++) {
-        for(uint32_t ii = 0; ii < nprimes; ii++) {
-        uint64_t mask = 0;
-        for(uint32_t j = 0; j < target; j++) {
-            if(mask & ((1UL) << ((primes[i] * j * j + primes[ii] * j) & 63))) {
-                break;
+            if (mask == (~(0UL))) {
+                fprintf(stderr, "Func(%d): %d XOR x\n", start, primes[i]);
             }
-            mask |= ((1UL) << ((primes[i] * j * j + primes[ii] * j) & 63));
         }
-        if(bitcount_64(mask) == target && i) {
-            fprintf(stderr, "Func: %d x^2 + %d x\n", primes[i], primes[ii]);
+        for (uint32_t i = 0; i < nprimes; i++) {
+            uint64_t mask = 0;
+            for (uint32_t j = start; j < target; j++) {
+                if (mask & ((1UL) << ((primes[i] * j * j) & 63))) {
+                    break;
+                }
+                mask |= ((1UL) << ((primes[i] * j * j) & 63));
+            }
+            if (bitcount_64(mask) == target && i) {
+                fprintf(stderr, "Func(%d): %d x^2\n", start, primes[i]);
+            }
         }
+        for (uint32_t i = 0; i < nprimes; i++) {
+            uint64_t mask = 0;
+            for (uint32_t j = start; j < target; j++) {
+                if (mask & ((1UL) << ((primes[i] * j * j + j) & 63))) {
+                    break;
+                }
+                mask |= ((1UL) << ((primes[i] * j * j + j) & 63));
+            }
+            if (bitcount_64(mask) == target && i) {
+                fprintf(stderr, "Func(%d): %d x^2 + x\n", start, primes[i]);
+            }
         }
-    }
-    uint64_t seed_mask = 0;
-    for(int i = 0; i < 16; i++) {
-        seed_mask |= (((1UL) << ((i * i) & 63)));
-    }
+        for (uint32_t i = 0; i < nprimes; i++) {
+            for (uint32_t ii = 0; ii < nprimes; ii++) {
+                uint64_t mask = 0;
+                for (uint32_t j = start; j < target; j++) {
+                    if (mask & ((1UL) << ((primes[i] * j * j + primes[ii] * j) &
+                                          63))) {
+                        break;
+                    }
+                    mask |=
+                        ((1UL) << ((primes[i] * j * j + primes[ii] * j) & 63));
+                }
+                if (bitcount_64(mask) == target && i) {
+                    fprintf(stderr,
+                            "Func(%d): %d x^2 + %d x\n",
+                            start,
+                            primes[i],
+                            primes[ii]);
+                }
+            }
+        }
+        uint64_t seed_mask = 0;
+        for (uint32_t i = start; i < (16u) + start; i++) {
+            seed_mask |= (((1UL) << ((i * i) & 63)));
+        }
 
-        for(uint32_t i = 0; i < nprimes; i++) {
-        uint64_t mask = seed_mask;
-        for(uint32_t j = 16; j < target; j++) {
-            if(mask & ((1UL) << ((primes[i] * j * j) & 63))) {
-                break;
+        for (uint32_t i = 0; i < nprimes; i++) {
+            uint64_t mask = seed_mask;
+            for (uint32_t j = 16 + start; j < target; j++) {
+                if (mask & ((1UL) << ((primes[i] * j * j) & 63))) {
+                    break;
+                }
+                mask |= ((1UL) << ((primes[i] * j * j) & 63));
             }
-            mask |= ((1UL) << ((primes[i] * j * j) & 63));
-        }
-        if(bitcount_64(mask) == target && i) {
-            fprintf(stderr, "Seed Func: %d x^2\n", primes[i]);
-        }
-    }
-    for(uint32_t i = 0; i < nprimes; i++) {
-        uint64_t mask = seed_mask;
-        for(uint32_t j = 16; j < target; j++) {
-            if(mask & ((1UL) << ((primes[i] * j * j + j) & 63))) {
-                break;
+            if (bitcount_64(mask) == target && i) {
+                fprintf(stderr, "Seed Func(%d): %d x^2\n", start, primes[i]);
             }
-            mask |= ((1UL) << ((primes[i] * j * j + j) & 63));
         }
-        if(bitcount_64(mask) == target && i) {
-            fprintf(stderr, "Seed Func: %d x^2 + x\n", primes[i]);
-        }
-    }
-    for(uint32_t i = 0; i < nprimes; i++) {
-        for(uint32_t ii = 0; ii < nprimes; ii++) {
-        uint64_t mask = seed_mask;
-        for(uint32_t j = 16; j < target; j++) {
-            if(mask & ((1UL) << ((primes[i] * j * j + primes[ii] * j) & 63))) {
-                break;
+        for (uint32_t i = 0; i < nprimes; i++) {
+            uint64_t mask = seed_mask;
+            for (uint32_t j = 16 + start; j < target; j++) {
+                if (mask & ((1UL) << ((primes[i] * j * j + j) & 63))) {
+                    break;
+                }
+                mask |= ((1UL) << ((primes[i] * j * j + j) & 63));
             }
-            mask |= ((1UL) << ((primes[i] * j * j + primes[ii] * j) & 63));
+            if (bitcount_64(mask) == target && i) {
+                fprintf(stderr,
+                        "Seed Func(%d): %d x^2 + x\n",
+                        start,
+                        primes[i]);
+            }
         }
-        if(bitcount_64(mask) == target && i) {
-            fprintf(stderr, "Seed Func: %d x^2 + %d x\n", primes[i], primes[ii]);
+        for (uint32_t i = 0; i < nprimes; i++) {
+            for (uint32_t ii = 0; ii < nprimes; ii++) {
+                uint64_t mask = seed_mask;
+                for (uint32_t j = 16 + start; j < target; j++) {
+                    if (mask & ((1UL) << ((primes[i] * j * j + primes[ii] * j) &
+                                          63))) {
+                        break;
+                    }
+                    mask |=
+                        ((1UL) << ((primes[i] * j * j + primes[ii] * j) & 63));
+                }
+                if (bitcount_64(mask) == target && i) {
+                    fprintf(stderr,
+                            "Seed Func(%d): %d x^2 + %d x\n",
+                            start,
+                            primes[i],
+                            primes[ii]);
+                }
+            }
         }
+        seed_mask = 0;
+        for (uint32_t i = start; i < (16u) + start; i++) {
+            seed_mask |= 2 * i;
+        }
+        for (uint32_t i = 0; i < nprimes; i++) {
+            uint64_t mask = seed_mask;
+            for (uint32_t j = 16 + start; j < target; j++) {
+                if (mask & ((1UL) << ((primes[i] * j * j) & 63))) {
+                    break;
+                }
+                mask |= ((1UL) << ((primes[i] * j * j) & 63));
+            }
+            if (bitcount_64(mask) == target && i) {
+                fprintf(stderr, "Seed 2 Func(%d): %d x^2\n", start, primes[i]);
+            }
+        }
+        for (uint32_t i = 0; i < nprimes; i++) {
+            uint64_t mask = seed_mask;
+            for (uint32_t j = 16 + start; j < target; j++) {
+                if (mask & ((1UL) << ((primes[i] * j * j + j) & 63))) {
+                    break;
+                }
+                mask |= ((1UL) << ((primes[i] * j * j + j) & 63));
+            }
+            if (bitcount_64(mask) == target && i) {
+                fprintf(stderr,
+                        "Seed 2 Func(%d): %d x^2 + x\n",
+                        start,
+                        primes[i]);
+            }
+        }
+        for (uint32_t i = 0; i < nprimes; i++) {
+            for (uint32_t ii = 0; ii < nprimes; ii++) {
+                uint64_t mask = seed_mask;
+                for (uint32_t j = 16 + start; j < target; j++) {
+                    if (mask & ((1UL) << ((primes[i] * j * j + primes[ii] * j) &
+                                          63))) {
+                        break;
+                    }
+                    mask |=
+                        ((1UL) << ((primes[i] * j * j + primes[ii] * j) & 63));
+                }
+                if (bitcount_64(mask) == target && i) {
+                    fprintf(stderr,
+                            "Seed 2 Func(%d): %d x^2 + %d x\n",
+                            start,
+                            primes[i],
+                            primes[ii]);
+                }
+            }
+        }
+        seed_mask = 0;
+        for (uint32_t i = start; i < (16u) + start; i++) {
+            seed_mask |= 3 * i;
+        }
+        for (uint32_t i = 0; i < nprimes; i++) {
+            uint64_t mask = seed_mask;
+            for (uint32_t j = 16 + start; j < target; j++) {
+                if (mask & ((1UL) << ((primes[i] * j * j) & 63))) {
+                    break;
+                }
+                mask |= ((1UL) << ((primes[i] * j * j) & 63));
+            }
+            if (bitcount_64(mask) == target && i) {
+                fprintf(stderr, "Seed 3 Func(%d): %d x^2\n", start, primes[i]);
+            }
+        }
+        for (uint32_t i = 0; i < nprimes; i++) {
+            uint64_t mask = seed_mask;
+            for (uint32_t j = 16 + start; j < target; j++) {
+                if (mask & ((1UL) << ((primes[i] * j * j + j) & 63))) {
+                    break;
+                }
+                mask |= ((1UL) << ((primes[i] * j * j + j) & 63));
+            }
+            if (bitcount_64(mask) == target && i) {
+                fprintf(stderr,
+                        "Seed 3 Func(%d): %d x^2 + x\n",
+                        start,
+                        primes[i]);
+            }
+        }
+        for (uint32_t i = 0; i < nprimes; i++) {
+            for (uint32_t ii = 0; ii < nprimes; ii++) {
+                uint64_t mask = seed_mask;
+                for (uint32_t j = 16 + start; j < target; j++) {
+                    if (mask & ((1UL) << ((primes[i] * j * j + primes[ii] * j) &
+                                          63))) {
+                        break;
+                    }
+                    mask |=
+                        ((1UL) << ((primes[i] * j * j + primes[ii] * j) & 63));
+                }
+                if (bitcount_64(mask) == target && i) {
+                    fprintf(stderr,
+                            "Seed 3 Func(%d): %d x^2 + %d x\n",
+                            start,
+                            primes[i],
+                            primes[ii]);
+                }
+            }
         }
     }
 }

@@ -426,7 +426,9 @@ resize(flat_hashtable_t * table) {
 #endif
     // tbh this is a debug variable but really shouldnt affect perf and will
     // spot a nasty bug
+#ifdef DEBUG
     uint32_t nnode_counter = 0;
+#endif
 
     for (uint32_t i = 0; i < _num_chunks; i++) {
         const fht_node_t * const nodes = old_chunks[i].nodes;
@@ -442,7 +444,9 @@ resize(flat_hashtable_t * table) {
 #endif
 
         // same as above counter
+#ifdef DEBUG
         uint32_t internal_nnode_counter = 0;
+#endif
 
         // heres the meat. Basically iterate through all nodes in line, skip if
         // deleted or invalid
@@ -456,9 +460,10 @@ resize(flat_hashtable_t * table) {
                 continue;
             }
             FHT_STATS_INCR(good_resize);
-
+#ifdef DEBUG
             nnode_counter++;
             internal_nnode_counter++;
+#endif
 
             // here we are getting tag/start idx/hash for the node. If its a
             // rehash resize call will recompute hash value and recalculate
@@ -552,15 +557,16 @@ resize(flat_hashtable_t * table) {
                                 fht_get_key(nodes[j]),
                                 fht_get_val(nodes[j]));
 #endif
-
+#ifdef DEBUG
                         internal_nnode_counter--;
                         nnode_counter--;
+#endif
 #ifdef FHT_HASH_ATTEMPTS
                         att = FHT_HASH_ATTEMPTS;
 #endif
                         break;
                     }
-#ifndef FHT_HASH_ATTEMPTS
+#if !defined FHT_HASH_ATTEMPTS && defined DEBUG
                     assert(new_j != FHT_SEARCH_NUMBER);
 #endif
                 }
@@ -569,6 +575,7 @@ resize(flat_hashtable_t * table) {
 #endif
         }
         // debugging....
+            #ifdef DEBUG
         if (internal_nnode_counter) {
             fprintf(stderr, "Error(%d) IDX(%d)\n", internal_nnode_counter, i);
             print_chunk("Old_Chunk", (flat_chunk_t *)(old_chunks + i), i);
@@ -578,10 +585,12 @@ resize(flat_hashtable_t * table) {
                         i + _num_chunks);
         }
         assert(!internal_nnode_counter);
+        #endif
     }
-
+#ifdef DEBUG
     assert(!nnode_counter);
-    table->chunks = new_chunks;
+#endif
+
 
     // update "log_init_size"  and log_incr if we rehashed. Basically you can
     // think of log_init_size is log of last size that we hashed and incr how
@@ -596,6 +605,7 @@ resize(flat_hashtable_t * table) {
         table->log_incr      = 0;
     }
 #endif
+    table->chunks = new_chunks;
 }
 
 // add new key/val pair (instead of this bullshit with typedefs if this table is
@@ -640,6 +650,7 @@ fht_add_key(flat_hashtable_t * table, fht_key_t new_key, fht_val_t new_val) {
 
         FHT_STATS_INCR(natt_add);
         __builtin_prefetch(chunk->nodes + (start_idx & FHT_CACHE_IDX_MASK));
+        __builtin_prefetch(chunk->tags + (start_idx & FHT_CACHE_IDX_MASK));
         // search through the array.
         for (uint32_t j = 0; j < FHT_SEARCH_NUMBER; j++) {
             FHT_STATS_INCR(niter_add);
@@ -773,6 +784,7 @@ fht_find_key(flat_hashtable_t * table, fht_key_t key) {
         fht_node_t * const nodes = chunk->nodes;
         FHT_STATS_INCR(natt_find);
         __builtin_prefetch(chunk->nodes + (start_idx & FHT_CACHE_IDX_MASK));
+        __builtin_prefetch(chunk->tags + (start_idx & FHT_CACHE_IDX_MASK));
         for (uint32_t j = 0; j < FHT_SEARCH_NUMBER; j++) {
             FHT_STATS_INCR(niter_find);
             const uint32_t test_idx = GEN_TEST_IDX(start_idx, j);
@@ -838,6 +850,7 @@ fht_delete_key(flat_hashtable_t * table, fht_key_t key) {
         fht_node_t * const nodes = chunk->nodes;
 
         __builtin_prefetch(chunk->nodes + ((start_idx)&FHT_CACHE_IDX_MASK));
+        __builtin_prefetch(chunk->tags + (start_idx & FHT_CACHE_IDX_MASK));
         for (uint32_t j = 0; j < FHT_SEARCH_NUMBER; j++) {
             const uint32_t test_idx = GEN_TEST_IDX(start_idx, j);
 
