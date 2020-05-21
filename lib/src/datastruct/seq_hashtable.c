@@ -21,6 +21,14 @@
  * 5) in general queries need to be optimized most imo
  */
 
+#ifdef FHT_USE_PRIMES
+static const uint32_t table_primes[21] = {
+    59u,     127u,     251u,     499u,     1009u,    2011u,     2539u,
+    4027u,   8089u,    16193u,   32401u,   64811u,   129607u,   259229u,
+    518509u, 1037059u, 2074129u, 4148279u, 8296553u, 16593127u, 33186281u,
+};
+#endif
+
 
 #ifdef FHT_STATS
 uint64_t nadd        = 0;
@@ -132,7 +140,7 @@ uint64_t good_resize    = 0;
 
 // tunable parameter determine how often need to rehash. REQ_UNIQUE... is
 // basically how many bits in tag need be unknown assuming a table idx
-#define REQ_UNIQUE_TAG_BITS (6)
+#define REQ_UNIQUE_TAG_BITS (5)
 #define REHASH_THRESH                                                          \
     (sizeof_bits(tag_type_t) - (REQ_UNIQUE_TAG_BITS + NEXT_HASH_OFFSET))
 //////////////////////////////////////////////////////////////////////
@@ -327,16 +335,18 @@ fht_init_table(uint32_t init_size) {
     // alignment is important...
     assert((sizeof(flat_chunk_t) % L1_CACHE_LINE_SIZE) == 0);
 
+#ifndef FHT_USE_PRIMES
     const uint64_t _init_size =
         init_size > DEFAULT_INIT_FHT_SIZE
             ? (init_size ? roundup_32(init_size) : DEFAULT_INIT_FHT_SIZE)
             : DEFAULT_INIT_FHT_SIZE;
 
     const uint32_t _log_init_size = ulog2_64(_init_size);
+#endif
 
     flat_hashtable_t * new_table =
         (flat_hashtable_t *)mycalloc(1, sizeof(flat_hashtable_t));
-
+#ifndef FHT_USE_PRIMES
     new_table->chunks = (flat_chunk_t *)mymmap_alloc(
         (_init_size / FHT_NODES_PER_CACHE_LINE) * sizeof(flat_chunk_t));
 #ifndef FHT_ALWAYS_REHASH
@@ -344,6 +354,12 @@ fht_init_table(uint32_t init_size) {
     new_table->log_incr      = 0;
 #else
     new_table->log_incr             = _log_init_size;
+#endif
+#endif
+#ifdef FHT_USE_PRIMES
+    new_table->chunks =
+        (flat_chunk_t *)mymmap_alloc((table_primes[13]) * sizeof(flat_chunk_t));
+    new_table->log_incr = 13;
 #endif
 
     return new_table;
@@ -403,6 +419,7 @@ resize(flat_hashtable_t * table) {
     // need a register vs what should be recomputed on the fly vs stored in
     // memory (on the stack)
     const flat_chunk_t * const old_chunks = table->chunks;
+#ifndef FHT_USE_PRIMES
 #ifndef FHT_ALWAYS_REHASH
     flat_chunk_t * const new_chunks = (flat_chunk_t *)mymmap_alloc(
         ((1 << (_log_init_size + _new_log_incr)) / FHT_NODES_PER_CACHE_LINE) *
@@ -412,15 +429,25 @@ resize(flat_hashtable_t * table) {
         ((1 << (_new_log_incr)) / FHT_NODES_PER_CACHE_LINE) *
         sizeof(flat_chunk_t));
 #endif
+#endif
+#ifdef FHT_USE_PRIMES
+    flat_chunk_t * const new_chunks = (flat_chunk_t *)mymmap_alloc(
+        (table_primes[_new_log_incr]) * sizeof(flat_chunk_t));
+#endif
 
 
     // num chunks to iterate through
+#ifndef FHT_USE_PRIMES
 #ifndef FHT_ALWAYS_REHASH
     const uint32_t _num_chunks =
         (1 << (_log_init_size + _old_log_incr)) / FHT_NODES_PER_CACHE_LINE;
 #else
     const uint32_t _num_chunks =
         (1 << (_new_log_incr - 1)) / FHT_NODES_PER_CACHE_LINE;
+#endif
+#endif
+#ifdef FHT_USE_PRIMES
+    const uint32_t _num_chunks = table_primes[_new_log_incr - 1];
 #endif
 
 #ifdef FHT_HASH_ATTEMPTS
@@ -438,7 +465,7 @@ resize(flat_hashtable_t * table) {
         const tag_type_t * const tags  = old_chunks[i].tags;
 
         // since we are adding 1 new bit 2 options for next chunk
-#ifndef FHT_HASH_ATTEMPTS
+#if !defined FHT_HASH_ATTEMPTS && !defined FHT_USE_PRIMES
         fht_node_t * const new_nodes[2] = { new_chunks[i].nodes,
                                             new_chunks[i + _num_chunks].nodes };
 
@@ -455,7 +482,7 @@ resize(flat_hashtable_t * table) {
         // heres the meat. Basically iterate through all nodes in line, skip if
         // deleted or invalid
         for (uint32_t j = 0; j < FHT_NODES_PER_CACHE_LINE; j++) {
-            if (!IS_VALID(tags[j]) || IS_DELETED(tags[j])) {
+            if ((tags[j] & (VALID_FLAG | DELETE_FLAG)) != VALID_FLAG) {
 
 #ifdef FHT_STATS
                 invalid_resize += (!IS_VALID(tags[j]));
@@ -463,6 +490,7 @@ resize(flat_hashtable_t * table) {
 #endif
                 continue;
             }
+
             FHT_STATS_INCR(good_resize);
 #ifdef DEBUG
             nnode_counter++;
@@ -525,7 +553,13 @@ resize(flat_hashtable_t * table) {
 #endif
 
 /* possible a faster way to select chunks */
-#ifdef FHT_HASH_ATTEMPTS
+#if defined FHT_HASH_ATTEMPTS || defined FHT_USE_PRIMES
+#ifdef FHT_USE_PRIMES
+                tag_type_t * const new_tags =
+                    new_chunks[(raw_slot % table_primes[_new_log_incr])].tags;
+                fht_node_t * const new_nodes =
+                    new_chunks[(raw_slot % table_primes[_new_log_incr])].nodes;
+#else
                 tag_type_t * const new_tags =
                     new_chunks[((raw_slot & chunk_mask) /
                                 FHT_NODES_PER_CACHE_LINE)]
@@ -534,6 +568,7 @@ resize(flat_hashtable_t * table) {
                     new_chunks[((raw_slot & chunk_mask) /
                                 FHT_NODES_PER_CACHE_LINE)]
                         .nodes;
+#endif
 #endif
 
 
@@ -549,8 +584,8 @@ resize(flat_hashtable_t * table) {
 
                     // we dont need to check for matches here (all nodes are by
                     // definition unique) so just find first invalid slot
-#ifdef FHT_HASH_ATTEMPTS
-                    if (!IS_VALID(new_tags[test_idx])) {
+#if defined FHT_HASH_ATTEMPTS || defined FHT_USE_PRIMES
+                    if (__builtin_expect(!IS_VALID(new_tags[test_idx]), 1)) {
                         new_tags[test_idx] = ltag;
                         set_key_val(new_nodes[test_idx],
                                     fht_get_key(nodes[j]),
@@ -603,6 +638,7 @@ resize(flat_hashtable_t * table) {
     // think of log_init_size is log of last size that we hashed and incr how
     // many resizes since then.
 
+#ifndef FHT_USE_PRIMES
 #ifdef FHT_ALWAYS_REHASH
     mymunmap((void *)old_chunks,
              ((1 << (_new_log_incr - 1)) / FHT_NODES_PER_CACHE_LINE) *
@@ -616,6 +652,7 @@ resize(flat_hashtable_t * table) {
         table->log_init_size = _log_init_size + _new_log_incr;
         table->log_incr      = 0;
     }
+#endif
 #endif
     table->chunks = new_chunks;
     return new_chunks;
@@ -653,12 +690,19 @@ fht_add_key(flat_hashtable_t * table, fht_key_t new_key, fht_val_t new_val) {
 #endif
         const uint32_t start_idx = GET_IDX(tag);
 
-
+#ifdef FHT_USE_PRIMES
         // get tags/nodes array
         tag_type_t * const tags = (tag_type_t * const)(
-            (chunks) + ((raw_slot & chunk_mask) / FHT_NODES_PER_CACHE_LINE));
+            (chunks) + ((raw_slot % table_primes[_log_incr])));
         fht_node_t * const nodes =
             (fht_node_t * const)(tags + FHT_NODES_PER_CACHE_LINE);
+#else
+    // get tags/nodes array
+    tag_type_t * const tags = (tag_type_t * const)(
+        (chunks) + ((raw_slot & chunk_mask) / FHT_NODES_PER_CACHE_LINE));
+    fht_node_t * const nodes =
+        (fht_node_t * const)(tags + FHT_NODES_PER_CACHE_LINE);
+#endif
 
 
         __builtin_prefetch(nodes + (start_idx & FHT_CACHE_IDX_MASK));
@@ -706,24 +750,23 @@ fht_add_key(flat_hashtable_t * table, fht_key_t new_key, fht_val_t new_val) {
 #endif
     // if we found no valid slots resize then add (without comparison checks
     // again)
+#ifdef FHT_USE_PRIMES
+    flat_chunk_t * const new_chunk =
+        resize(table) + ((raw_slot % table_primes[_log_incr + 1]));
+#elif defined FHT_ALWAYS_REHASH
     flat_chunk_t * const new_chunk =
         resize(table) +
         ((raw_slot & TO_MASK(_log_incr + 1)) / FHT_NODES_PER_CACHE_LINE);
+#else
+    flat_chunk_t * const new_chunk =
+        resize(table) +
+        ((raw_slot & TO_MASK(_log_init_size + _log_incr + 1)) / FHT_NODES_PER_CACHE_LINE);
+#endif
 
 #ifdef FHT_HASH_ATTEMPTS
     for (uint32_t att = 0; att < FHT_HASH_ATTEMPTS; att++) {
         // computer hash and tag... # persay
         const uint32_t raw_slot = hash_fht_key(new_key, att + hseed);
-#endif
-#ifndef FHT_ALWAYS_REHASH
-        flat_chunk_t * const new_chunk =
-            (table->chunks) +
-            ((raw_slot & TO_MASK(_log_init_size + _log_incr + 1)) /
-             FHT_NODES_PER_CACHE_LINE);
-#else
-    /*    flat_chunk_t * const new_chunk =
-    (table->chunks) +
-    ((raw_slot & TO_MASK(_log_incr + 1)) / FHT_NODES_PER_CACHE_LINE);*/
 #endif
 
         tag_type_t * const new_tags  = new_chunk->tags;
@@ -794,10 +837,19 @@ fht_find_key(flat_hashtable_t * table, fht_key_t key) {
         const uint32_t start_idx = GET_IDX(tag);
 
         // get tags/nodes array
-        const tag_type_t * const tags = (const tag_type_t * const)(
-            (chunks) + ((raw_slot & chunk_mask) / FHT_NODES_PER_CACHE_LINE));
-        const fht_node_t * const nodes =
-            (const fht_node_t * const)(tags + FHT_NODES_PER_CACHE_LINE);
+#ifdef FHT_USE_PRIMES
+        // get tags/nodes array
+        tag_type_t * const tags = (tag_type_t * const)(
+            (chunks) + ((raw_slot % table_primes[_log_incr])));
+        fht_node_t * const nodes =
+            (fht_node_t * const)(tags + FHT_NODES_PER_CACHE_LINE);
+#else
+    // get tags/nodes array
+    tag_type_t * const tags = (tag_type_t * const)(
+        (chunks) + ((raw_slot & chunk_mask) / FHT_NODES_PER_CACHE_LINE));
+    fht_node_t * const nodes =
+        (fht_node_t * const)(tags + FHT_NODES_PER_CACHE_LINE);
+#endif
 
         __builtin_prefetch(nodes + (start_idx & FHT_CACHE_IDX_MASK));
         __builtin_prefetch(tags + (start_idx & FHT_CACHE_IDX_MASK));
@@ -813,7 +865,7 @@ fht_find_key(flat_hashtable_t * table, fht_key_t key) {
             }
             else if ((GET_CONTENT(tags[test_idx]) == tag)) {
                 FHT_STATS_INCR(tag_matches);
-                if (compare_keys(fht_get_key(nodes[test_idx]), key) == EQUALS) {
+                if (compare_keys(fht_get_key(nodes[test_idx]), key)) {
                     if (IS_DELETED(tags[test_idx])) {
                         FHT_STATS_INCR(fail_find);
                         return FHT_NOT_FOUND;
@@ -860,12 +912,19 @@ fht_delete_key(flat_hashtable_t * table, fht_key_t key) {
     const tag_type_t tag        = gen_tag(raw_slot, _log_incr);
 #endif
         const uint32_t start_idx = GET_IDX(tag);
+#ifdef FHT_USE_PRIMES
         // get tags/nodes array
-        tag_type_t * const tags =
-            (tag_type_t * const)((table->chunks) + ((raw_slot & chunk_mask) /
-                                                    FHT_NODES_PER_CACHE_LINE));
+        tag_type_t * const tags = (tag_type_t * const)(
+            (table->chunks) + ((raw_slot % table_primes[_log_incr])));
         fht_node_t * const nodes =
             (fht_node_t * const)(tags + FHT_NODES_PER_CACHE_LINE);
+#else
+    // get tags/nodes array
+    tag_type_t * const tags = (tag_type_t * const)(
+        (table->chunks) + ((raw_slot & chunk_mask) / FHT_NODES_PER_CACHE_LINE));
+    fht_node_t * const nodes =
+        (fht_node_t * const)(tags + FHT_NODES_PER_CACHE_LINE);
+#endif
 
         __builtin_prefetch(nodes + (start_idx & FHT_CACHE_IDX_MASK));
         __builtin_prefetch(tags + (start_idx & FHT_CACHE_IDX_MASK));
@@ -877,7 +936,7 @@ fht_delete_key(flat_hashtable_t * table, fht_key_t key) {
             }
             else if ((GET_CONTENT(tags[test_idx]) == tag)) {
                 FHT_STATS_INCR(tag_matches);
-                if (compare_keys(fht_get_key(nodes[test_idx]), key) == EQUALS) {
+                if (compare_keys(fht_get_key(nodes[test_idx]), key)) {
                     if (IS_DELETED(tags[test_idx])) {
                         return FHT_NOT_DELETED;
                     }

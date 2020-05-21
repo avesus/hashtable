@@ -5,6 +5,7 @@
 #include <helpers/util.h>
 
 // turn on for some trivial stats collection
+//#define FHT_USE_PRIMES
 //#define FHT_STATS
 #define FHT_ALWAYS_REHASH
 //#define FHT_HASH_ATTEMPTS 2
