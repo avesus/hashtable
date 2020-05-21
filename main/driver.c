@@ -14,6 +14,7 @@ uint32_t FHT_TEST_SIZE = (10);
 uint32_t Q_PER_INS     = 0;
 uint32_t init_size     = 0;
 uint32_t which_table   = OUR_TABLE;
+uint32_t fun_guess     = 0;
 // clang-format off
 #define Version "0.1"
 static ArgOption args[] = {
@@ -23,6 +24,7 @@ static ArgOption args[] = {
   { KindOption,   Integer, 		"-s",       0,     &FHT_TEST_SIZE,	"Log 2 for test size" },
   { KindOption,   Integer, 		"-q",       0,     &Q_PER_INS,  	"True value for queries per insert" },
   { KindOption,   Set,   		"-w",       0,     &which_table,  	"dont set for our table, set for other table" },
+  { KindOption,   Integer, 		"-f",       0,     &fun_guess,  	"test possible spread functions" },
   { KindOption,   Integer, 		"--seed", 	0,     &rseed,  		"Set random number seed" },
   { KindHelp,     Help, 	"-h" },
   { KindEnd }
@@ -60,6 +62,7 @@ udiv(uint64_t num, uint64_t den) {
 }
 
 static void correct_test();
+static void test_spread();
 int
 main(int argc, char ** argv) {
     progname = argv[0];
@@ -75,6 +78,11 @@ main(int argc, char ** argv) {
     }
     freeCommandLine();
     freeArgumentParser(ap);
+
+    if (fun_guess) {
+        test_spread();
+        return 0;
+    }
 
     // code goes here
     struct timespec start, end;
@@ -338,7 +346,8 @@ correct_test() {
         }
         for (uint32_t i = 0; i < FHT_TEST_SIZE; i++) {
             if (taken[test_nodes[i + FHT_TEST_SIZE].key - (1 << 25)] == 1) {
-                assert(fht_find_key(table, test_nodes[i + FHT_TEST_SIZE].key) == FHT_FOUND);
+                assert(fht_find_key(table, test_nodes[i + FHT_TEST_SIZE].key) ==
+                       FHT_FOUND);
                 assert(
                     fht_delete_key(table, test_nodes[i + FHT_TEST_SIZE].key) ==
                     FHT_DELETED);
@@ -347,6 +356,140 @@ correct_test() {
         }
         for (uint32_t i = 0; i < 2 * FHT_TEST_SIZE; i++) {
             assert(fht_find_key(table, test_nodes[i].key) == FHT_NOT_FOUND);
+        }
+    }
+}
+
+
+static void
+test_spread() {
+
+    // generate primes up to some reasonable value (basically stopping when * 64
+    // would overflow)
+    const uint32_t max_prime = 1 << 16;
+    uint32_t *     sieve = (uint32_t *)mycalloc(max_prime, sizeof(uint32_t));
+
+    uint32_t max_prime_sqrt = (uint32_t)(sqrt((double)max_prime) + 1);
+    uint32_t nprimes        = max_prime - 2;
+    sieve[0]                = 1;
+    sieve[1]                = 1;
+    for (uint32_t i = 0; i < max_prime_sqrt; i++) {
+        if (sieve[i]) {
+            continue;
+        }
+        for (uint32_t j = i * i; j < max_prime; j += i) {
+            sieve[j] = 1;
+            nprimes--;
+        }
+    }
+    uint32_t * primes = (uint32_t *)mycalloc(nprimes, sizeof(uint32_t));
+
+    uint32_t iter = 0;
+    for (uint32_t i = 0; i < max_prime; i++) {
+        if (sieve[i]) {
+            continue;
+        }
+        primes[iter++] = i;
+    }
+
+    myfree(sieve);
+
+
+    nprimes = iter;
+    const uint32_t target = fun_guess;
+    
+    //test linear
+    for(uint32_t i = 0; i < nprimes && 0; i++) {
+        uint64_t mask = 0;
+        for(uint32_t j = 0; j < 64; j++) {
+            if(mask & ((1UL) << ((primes[i] * j) & 63))) {
+                break;
+            }
+            mask |= ((1UL) << ((primes[i] * j) & 63));
+        }
+        if(mask == (~(0UL))) {
+            fprintf(stderr, "Func: %d x\n", primes[i]);
+        }
+    }
+    for(uint32_t i = 0; i < nprimes; i++) {
+        uint64_t mask = 0;
+        for(uint32_t j = 0; j < target; j++) {
+            if(mask & ((1UL) << ((primes[i] * j * j) & 63))) {
+                break;
+            }
+            mask |= ((1UL) << ((primes[i] * j * j) & 63));
+        }
+        if(bitcount_64(mask) == target && i) {
+            fprintf(stderr, "Func: %d x^2\n", primes[i]);
+        }
+    }
+    for(uint32_t i = 0; i < nprimes; i++) {
+        uint64_t mask = 0;
+        for(uint32_t j = 0; j < target; j++) {
+            if(mask & ((1UL) << ((primes[i] * j * j + j) & 63))) {
+                break;
+            }
+            mask |= ((1UL) << ((primes[i] * j * j + j) & 63));
+        }
+        if(bitcount_64(mask) == target && i) {
+            fprintf(stderr, "Func: %d x^2 + x\n", primes[i]);
+        }
+    }
+    for(uint32_t i = 0; i < nprimes; i++) {
+        for(uint32_t ii = 0; ii < nprimes; ii++) {
+        uint64_t mask = 0;
+        for(uint32_t j = 0; j < target; j++) {
+            if(mask & ((1UL) << ((primes[i] * j * j + primes[ii] * j) & 63))) {
+                break;
+            }
+            mask |= ((1UL) << ((primes[i] * j * j + primes[ii] * j) & 63));
+        }
+        if(bitcount_64(mask) == target && i) {
+            fprintf(stderr, "Func: %d x^2 + %d x\n", primes[i], primes[ii]);
+        }
+        }
+    }
+    uint64_t seed_mask = 0;
+    for(int i = 0; i < 16; i++) {
+        seed_mask |= (((1UL) << ((i * i) & 63)));
+    }
+
+        for(uint32_t i = 0; i < nprimes; i++) {
+        uint64_t mask = seed_mask;
+        for(uint32_t j = 16; j < target; j++) {
+            if(mask & ((1UL) << ((primes[i] * j * j) & 63))) {
+                break;
+            }
+            mask |= ((1UL) << ((primes[i] * j * j) & 63));
+        }
+        if(bitcount_64(mask) == target && i) {
+            fprintf(stderr, "Seed Func: %d x^2\n", primes[i]);
+        }
+    }
+    for(uint32_t i = 0; i < nprimes; i++) {
+        uint64_t mask = seed_mask;
+        for(uint32_t j = 16; j < target; j++) {
+            if(mask & ((1UL) << ((primes[i] * j * j + j) & 63))) {
+                break;
+            }
+            mask |= ((1UL) << ((primes[i] * j * j + j) & 63));
+        }
+        if(bitcount_64(mask) == target && i) {
+            fprintf(stderr, "Seed Func: %d x^2 + x\n", primes[i]);
+        }
+    }
+    for(uint32_t i = 0; i < nprimes; i++) {
+        for(uint32_t ii = 0; ii < nprimes; ii++) {
+        uint64_t mask = seed_mask;
+        for(uint32_t j = 16; j < target; j++) {
+            if(mask & ((1UL) << ((primes[i] * j * j + primes[ii] * j) & 63))) {
+                break;
+            }
+            mask |= ((1UL) << ((primes[i] * j * j + primes[ii] * j) & 63));
+        }
+        if(bitcount_64(mask) == target && i) {
+            fprintf(stderr, "Seed Func: %d x^2 + %d x\n", primes[i], primes[ii]);
+        }
         }
     }
 }

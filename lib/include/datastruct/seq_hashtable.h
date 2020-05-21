@@ -7,6 +7,11 @@
 // turn on for some trivial stats collection
 #define FHT_STATS
 #define FHT_ALWAYS_REHASH
+//#define FHT_HASH_ATTEMPTS 2
+
+#if defined FHT_HASH_ATTEMPTS && !defined FHT_ALWAYS_REHASH
+static_assert(0, "Bad defines\n");
+#endif
 
 
 //////////////////////////////////////////////////////////////////////
@@ -45,7 +50,6 @@ typedef uint32_t fht_val_t;
 
 // actually tunable. Make sure you update log
 typedef uint8_t tag_type_t;
-
 // a compile time way to compute this would be nice but since I refused to past
 // c++11 this seems only way
 #define FHT_LOG_TAG_TYPE_SIZE 0
