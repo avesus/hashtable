@@ -72,10 +72,24 @@ uint64_t good_resize    = 0;
 //////////////////////////////////////////////////////////////////////
 #define TO_MASK(X) ((1 << (X)) - 1)
 //////////////////////////////////////////////////////////////////////
-
+#ifdef FHT_FULL_TAG
 // valid / invalid bits in the tag
-#define VALID_FLAG  (0x1)
-#define DELETE_FLAG (0x2)
+#define VALID_VAL  (0x0)
+#define DELETE_VAL (0x1)
+// delete flag + valid_flag
+#define NEXT_HASH_OFFSET        (0)
+#define GET_NEXT_HASH_BIT(X, Y) (((X) >> (NEXT_HASH_OFFSET + (Y))) & 0x1)
+
+#define IS_VALID(X)    ((X) != VALID_VAL)
+#define SET_UNVALID(X) ((X) = VALID_VAL)
+
+#define IS_DELETED(X)  ((X) == DELETE_VAL)
+#define SET_DELETED(X) ((X) = DELETE_VAL)
+
+#else
+// valid / invalid bits in the tag
+#define VALID_FLAG              (0x1)
+#define DELETE_FLAG             (0x2)
 // delete flag + valid_flag
 #define NEXT_HASH_OFFSET        (1 + 1)
 #define GET_NEXT_HASH_BIT(X, Y) (((X) >> (NEXT_HASH_OFFSET + (Y))) & 0x1)
@@ -87,6 +101,9 @@ uint64_t good_resize    = 0;
 #define IS_DELETED(X)    ((X)&DELETE_FLAG)
 #define SET_DELETED(X)   ((X) |= DELETE_FLAG)
 #define SET_UNDELETED(X) ((X) ^= DELETE_FLAG)
+
+
+#endif
 
 // for calculating IDX from tag
 
@@ -113,12 +130,19 @@ uint64_t good_resize    = 0;
 #endif
 
 // get the actual content (for matching)
-#define CONTENT_MASK   (~(VALID_FLAG | DELETE_FLAG))
+#ifdef FHT_FULL_TAG
+#define CONTENT_MASK (0xff)
+#else
+#define CONTENT_MASK (~(VALID_FLAG | DELETE_FLAG))
+#endif
 #define GET_CONTENT(X) ((X)&CONTENT_MASK)
 
 // takes raw slot and log_init_size to get tag content
 #ifndef FHT_ALWAYS_REHASH
 #define gen_tag(X, Y) ((((X) >> (Y)) << NEXT_HASH_OFFSET))
+#elif defined FHT_FULL_TAG
+#define gen_tag(X, Y)                                                          \
+    ((((X)&CONTENT_MASK) <= DELETE_VAL) ? (0xff) : ((X)&CONTENT_MASK))
 #else
 #define gen_tag(X, Y) ((X) << NEXT_HASH_OFFSET)
 #endif
@@ -482,7 +506,11 @@ resize(flat_hashtable_t * table) {
         // heres the meat. Basically iterate through all nodes in line, skip if
         // deleted or invalid
         for (uint32_t j = 0; j < FHT_NODES_PER_CACHE_LINE; j++) {
+#ifdef FHT_FULL_TAG
+            if (IS_DELETED(tags[j]) || (!IS_VALID(tags[j]))) {
+#else
             if ((tags[j] & (VALID_FLAG | DELETE_FLAG)) != VALID_FLAG) {
+#endif
 
 #ifdef FHT_STATS
                 invalid_resize += (!IS_VALID(tags[j]));
@@ -490,6 +518,9 @@ resize(flat_hashtable_t * table) {
 #endif
                 continue;
             }
+#ifdef FHT_FULL_TAG
+            const tag_type_t ltag = tags[j];
+#endif
 
             FHT_STATS_INCR(good_resize);
 #ifdef DEBUG
@@ -514,8 +545,10 @@ resize(flat_hashtable_t * table) {
                 const uint32_t next_hash_bit =
                     (raw_slot >> (_new_log_incr - 1) & 0x1);
 #endif
+#ifndef FHT_FULL_TAG
                 const tag_type_t ltag =
                     gen_tag(raw_slot, _new_log_incr) | VALID_FLAG;
+#endif
                 const uint32_t start_idx = GET_IDX(ltag);
 
 
@@ -723,7 +756,11 @@ fht_add_key(flat_hashtable_t * table, fht_key_t new_key, fht_val_t new_val) {
 
                 // if block is invalid add there (valid basically means taken).
                 if (__builtin_expect(!IS_VALID(tags[test_idx]), 1)) {
-                tags[test_idx] = (tag | VALID_FLAG);
+#ifdef FHT_FULL_TAG
+                tags[test_idx] = tag;
+#else
+            tags[test_idx] = (tag | VALID_FLAG);
+#endif
                 set_key_val(nodes[test_idx], new_key, new_val);
                 FHT_STATS_INCR(success_add);
                 return FHT_ADDED;
@@ -734,11 +771,13 @@ fht_add_key(flat_hashtable_t * table, fht_key_t new_key, fht_val_t new_val) {
                 FHT_STATS_INCR(tag_matches);
                 if (compare_keys(fht_get_key(nodes[test_idx]), new_key) ==
                     EQUALS) {
+#ifndef FHT_FULL_TAG
                     if (IS_DELETED(tags[test_idx])) {
                         SET_UNDELETED(tags[test_idx]);
                         FHT_STATS_INCR(success_add);
                         return FHT_ADDED;
                     }
+#endif
                     FHT_STATS_INCR(fail_add);
                     return FHT_NOT_ADDED;
                 }
@@ -759,8 +798,8 @@ fht_add_key(flat_hashtable_t * table, fht_key_t new_key, fht_val_t new_val) {
         ((raw_slot & TO_MASK(_log_incr + 1)) / FHT_NODES_PER_CACHE_LINE);
 #else
     flat_chunk_t * const new_chunk =
-        resize(table) +
-        ((raw_slot & TO_MASK(_log_init_size + _log_incr + 1)) / FHT_NODES_PER_CACHE_LINE);
+        resize(table) + ((raw_slot & TO_MASK(_log_init_size + _log_incr + 1)) /
+                         FHT_NODES_PER_CACHE_LINE);
 #endif
 
 #ifdef FHT_HASH_ATTEMPTS
@@ -776,7 +815,7 @@ fht_add_key(flat_hashtable_t * table, fht_key_t new_key, fht_val_t new_val) {
 #ifndef FHT_ALWAYS_REHASH
         const tag_type_t new_tag = gen_tag(raw_slot, table->log_init_size);
 #else
-    const tag_type_t new_tag    = gen_tag(raw_slot, _log_incr + 1);
+    const tag_type_t new_tag = gen_tag(raw_slot, _log_incr + 1);
 #endif
         const uint32_t new_start_idx = GET_IDX(new_tag);
 
@@ -786,7 +825,11 @@ fht_add_key(flat_hashtable_t * table, fht_key_t new_key, fht_val_t new_val) {
             FHT_STATS_INCR(niter_add);
             const uint32_t test_idx = GEN_TEST_IDX(new_start_idx, j);
             if (__builtin_expect(!IS_VALID(new_tags[test_idx]), 1)) {
-                new_tags[test_idx] = (new_tag | VALID_FLAG);
+#ifdef FHT_FULL_TAG
+                new_tags[test_idx] = new_tag;
+#else
+            new_tags[test_idx] = (new_tag | VALID_FLAG);
+#endif
                 set_key_val(new_nodes[test_idx], new_key, new_val);
                 FHT_STATS_INCR(success_add);
                 return FHT_ADDED;

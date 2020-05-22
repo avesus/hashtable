@@ -1,6 +1,12 @@
 #include "driver.h"
 
-#include <datastruct/seq_hashtable.h>
+typedef struct test_node {
+    uint32_t key;
+    uint32_t val;
+} test_node_t;
+
+
+#include <datastruct/fht_ht.hpp>
 
 // table that supposedly is fastest hashmap ever....
 #include <datastruct/flat_hash_map.hpp>
@@ -93,8 +99,8 @@ main(int argc, char ** argv) {
 #endif
 
     // init random nodes
-    fht_node_t * test_nodes =
-        (fht_node_t *)mycalloc(FHT_TEST_SIZE, sizeof(fht_node_t));
+    test_node_t * test_nodes =
+        (test_node_t *)mycalloc(FHT_TEST_SIZE, sizeof(test_node_t));
 
     for (uint32_t i = 0; i < FHT_TEST_SIZE; i++) {
         (test_nodes + i)->key = random();
@@ -109,14 +115,14 @@ main(int argc, char ** argv) {
     }
 
     if (which_table == OUR_TABLE) {
-        flat_hashtable_t * table = fht_init_table(1 << init_size);
+        fht_table<uint32_t, uint64_t> table(1 << init_size);
 
         // run perf test
         clock_gettime(CLOCK_MONOTONIC, &start);
         for (uint32_t i = 0; i < FHT_TEST_SIZE; i++) {
-            fht_add_key(table, (test_nodes + i)->key, (test_nodes + i)->val);
+            table.add((test_nodes + i)->key, (test_nodes + i)->val);
             for (uint32_t j = i * Q_PER_INS; j < (i + 1) * Q_PER_INS; j++) {
-                fht_find_key(table, test_keys[j]);
+                table.find(test_keys[j]);
             }
         }
     }
@@ -181,11 +187,11 @@ main(int argc, char ** argv) {
 static void
 correct_test() {
 
-    uint8_t *          taken = (uint8_t *)mycalloc((1 << 25), sizeof(uint32_t));
-    uint32_t           total_unique = 0;
-    flat_hashtable_t * table        = fht_init_table(1);
-    fht_node_t *       test_nodes =
-        (fht_node_t *)mycalloc(2 * FHT_TEST_SIZE, sizeof(fht_node_t));
+    uint8_t * taken        = (uint8_t *)mycalloc((1 << 25), sizeof(uint32_t));
+    uint32_t  total_unique = 0;
+    fht_table<uint32_t, uint32_t> table;
+    test_node_t *                 test_nodes =
+        (test_node_t *)mycalloc(2 * FHT_TEST_SIZE, sizeof(test_node_t));
     for (uint32_t i = 0; i < FHT_TEST_SIZE; i++) {
         uint32_t rnum         = random() % (1 << 25);
         (test_nodes + i)->key = rnum;
@@ -207,23 +213,19 @@ correct_test() {
 
             if (taken[test_nodes[i].key] == 0) {
                 total_unique += (att == 0);
-                assert(fht_delete_key(table, test_nodes[i].key) ==
-                       FHT_NOT_DELETED);
-                assert(fht_find_key(table, test_nodes[i].key) == FHT_NOT_FOUND);
-                assert(fht_add_key(table,
-                                   (test_nodes + i)->key,
-                                   (test_nodes + i)->val) == FHT_ADDED);
-                assert(fht_find_key(table, test_nodes[i].key) == FHT_FOUND);
+                assert(table.remove(test_nodes[i].key) == FHT_NOT_DELETED);
+                assert(table.find(test_nodes[i].key) == FHT_NOT_FOUND);
+                assert(table.add((test_nodes + i)->key,
+                                 (test_nodes + i)->val) == FHT_ADDED);
+                assert(table.find(test_nodes[i].key) == FHT_FOUND);
             }
             else {
-                assert(fht_find_key(table, test_nodes[i].key) == FHT_FOUND);
-                assert(fht_add_key(table,
-                                   (test_nodes + i)->key,
-                                   (test_nodes + i)->val) == FHT_NOT_ADDED);
-                assert(fht_delete_key(table, test_nodes[i].key) == FHT_DELETED);
-                assert(fht_add_key(table,
-                                   (test_nodes + i)->key,
-                                   (test_nodes + i)->val) == FHT_ADDED);
+                assert(table.find(test_nodes[i].key) == FHT_FOUND);
+                assert(table.add((test_nodes + i)->key,
+                                 (test_nodes + i)->val) == FHT_NOT_ADDED);
+                assert(table.remove(test_nodes[i].key) == FHT_DELETED);
+                assert(table.add((test_nodes + i)->key,
+                                 (test_nodes + i)->val) == FHT_ADDED);
             }
             taken[test_nodes[i].key] = 1;
         }
@@ -233,10 +235,9 @@ correct_test() {
                   i,
                   test_nodes[i].key,
                   test_nodes[i].val);
-            assert(fht_find_key(table, test_nodes[i].key) == FHT_FOUND);
-            assert(fht_add_key(table,
-                               (test_nodes + i)->key,
-                               (test_nodes + i)->val) == FHT_NOT_ADDED);
+            assert(table.find(test_nodes[i].key) == FHT_FOUND);
+            assert(table.add((test_nodes + i)->key, (test_nodes + i)->val) ==
+                   FHT_NOT_ADDED);
         }
         for (uint32_t i = 0; i < FHT_TEST_SIZE; i++) {
             PRINT(MED_VERBOSE,
@@ -245,10 +246,10 @@ correct_test() {
                   test_nodes[i].key,
                   test_nodes[i].val);
             if (taken[test_nodes[i].key] == 1) {
-                assert(fht_delete_key(table, test_nodes[i].key) == FHT_DELETED);
+                assert(table.remove(test_nodes[i].key) == FHT_DELETED);
             }
             else {
-                assert(fht_find_key(table, test_nodes[i].key) == FHT_NOT_FOUND);
+                assert(table.find(test_nodes[i].key) == FHT_NOT_FOUND);
             }
             taken[test_nodes[i].key] = 0;
         }
@@ -259,22 +260,18 @@ correct_test() {
                   test_nodes[i].key,
                   test_nodes[i].val);
             if (taken[test_nodes[i].key] == 0) {
-                assert(fht_delete_key(table, test_nodes[i].key) ==
-                       FHT_NOT_DELETED);
-                assert(fht_find_key(table, test_nodes[i].key) == FHT_NOT_FOUND);
-                assert(fht_add_key(table,
-                                   (test_nodes + i)->key,
-                                   (test_nodes + i)->val) == FHT_ADDED);
+                assert(table.remove(test_nodes[i].key) == FHT_NOT_DELETED);
+                assert(table.find(test_nodes[i].key) == FHT_NOT_FOUND);
+                assert(table.add((test_nodes + i)->key,
+                                 (test_nodes + i)->val) == FHT_ADDED);
             }
             else {
-                assert(fht_find_key(table, test_nodes[i].key) == FHT_FOUND);
-                assert(fht_add_key(table,
-                                   (test_nodes + i)->key,
-                                   (test_nodes + i)->val) == FHT_NOT_ADDED);
-                assert(fht_delete_key(table, test_nodes[i].key) == FHT_DELETED);
-                assert(fht_add_key(table,
-                                   (test_nodes + i)->key,
-                                   (test_nodes + i)->val) == FHT_ADDED);
+                assert(table.find(test_nodes[i].key) == FHT_FOUND);
+                assert(table.add((test_nodes + i)->key,
+                                 (test_nodes + i)->val) == FHT_NOT_ADDED);
+                assert(table.remove(test_nodes[i].key) == FHT_DELETED);
+                assert(table.add((test_nodes + i)->key,
+                                 (test_nodes + i)->val) == FHT_ADDED);
             }
             taken[test_nodes[i].key] = 1;
         }
@@ -286,10 +283,10 @@ correct_test() {
                   test_nodes[i].key,
                   test_nodes[i].val);
             if (taken[test_nodes[i].key] == 1) {
-                assert(fht_find_key(table, test_nodes[i].key) == FHT_FOUND);
+                assert(table.find(test_nodes[i].key) == FHT_FOUND);
             }
             else {
-                assert(fht_find_key(table, test_nodes[i].key) == FHT_NOT_FOUND);
+                assert(table.find(test_nodes[i].key) == FHT_NOT_FOUND);
             }
         }
 
@@ -300,10 +297,10 @@ correct_test() {
                   test_nodes[i].key,
                   test_nodes[i].val);
             if (taken[test_nodes[i].key] == 1) {
-                assert(fht_delete_key(table, test_nodes[i].key) == FHT_DELETED);
+                assert(table.remove(test_nodes[i].key) == FHT_DELETED);
             }
             else {
-                assert(fht_find_key(table, test_nodes[i].key) == FHT_NOT_FOUND);
+                assert(table.find(test_nodes[i].key) == FHT_NOT_FOUND);
             }
             taken[test_nodes[i].key] = 0;
         }
@@ -317,45 +314,39 @@ correct_test() {
 
             if (taken[test_nodes[i + FHT_TEST_SIZE].key - (1 << 25)] == 0) {
                 total_unique += (att == 0);
-                assert(
-                    fht_delete_key(table, test_nodes[i + FHT_TEST_SIZE].key) ==
-                    FHT_NOT_DELETED);
-                assert(fht_find_key(table, test_nodes[i + FHT_TEST_SIZE].key) ==
+                assert(table.remove(test_nodes[i + FHT_TEST_SIZE].key) ==
+                       FHT_NOT_DELETED);
+                assert(table.find(test_nodes[i + FHT_TEST_SIZE].key) ==
                        FHT_NOT_FOUND);
-                assert(fht_add_key(table,
-                                   (test_nodes + i + FHT_TEST_SIZE)->key,
-                                   (test_nodes + i + FHT_TEST_SIZE)->val) ==
+                assert(table.add((test_nodes + i + FHT_TEST_SIZE)->key,
+                                 (test_nodes + i + FHT_TEST_SIZE)->val) ==
                        FHT_ADDED);
             }
             else {
-                assert(fht_find_key(table, test_nodes[i + FHT_TEST_SIZE].key) ==
+                assert(table.find(test_nodes[i + FHT_TEST_SIZE].key) ==
                        FHT_FOUND);
-                assert(fht_add_key(table,
-                                   (test_nodes + i + FHT_TEST_SIZE)->key,
-                                   (test_nodes + i + FHT_TEST_SIZE)->val) ==
+                assert(table.add((test_nodes + i + FHT_TEST_SIZE)->key,
+                                 (test_nodes + i + FHT_TEST_SIZE)->val) ==
                        FHT_NOT_ADDED);
-                assert(
-                    fht_delete_key(table, test_nodes[i + FHT_TEST_SIZE].key) ==
-                    FHT_DELETED);
-                assert(fht_add_key(table,
-                                   (test_nodes + i + FHT_TEST_SIZE)->key,
-                                   (test_nodes + i + FHT_TEST_SIZE)->val) ==
+                assert(table.remove(test_nodes[i + FHT_TEST_SIZE].key) ==
+                       FHT_DELETED);
+                assert(table.add((test_nodes + i + FHT_TEST_SIZE)->key,
+                                 (test_nodes + i + FHT_TEST_SIZE)->val) ==
                        FHT_ADDED);
             }
             taken[test_nodes[i + FHT_TEST_SIZE].key - (1 << 25)] = 1;
         }
         for (uint32_t i = 0; i < FHT_TEST_SIZE; i++) {
             if (taken[test_nodes[i + FHT_TEST_SIZE].key - (1 << 25)] == 1) {
-                assert(fht_find_key(table, test_nodes[i + FHT_TEST_SIZE].key) ==
+                assert(table.find(test_nodes[i + FHT_TEST_SIZE].key) ==
                        FHT_FOUND);
-                assert(
-                    fht_delete_key(table, test_nodes[i + FHT_TEST_SIZE].key) ==
-                    FHT_DELETED);
+                assert(table.remove(test_nodes[i + FHT_TEST_SIZE].key) ==
+                       FHT_DELETED);
                 taken[test_nodes[i + FHT_TEST_SIZE].key - (1 << 25)] = 0;
             }
         }
         for (uint32_t i = 0; i < 2 * FHT_TEST_SIZE; i++) {
-            assert(fht_find_key(table, test_nodes[i].key) == FHT_NOT_FOUND);
+            assert(table.find(test_nodes[i].key) == FHT_NOT_FOUND);
         }
     }
 }

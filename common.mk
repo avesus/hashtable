@@ -51,4 +51,4 @@ CFLAGS=-O0 -std=c++11 -Wall -Wno-pointer-arith -Wno-unused-function -g3 -DDEBUG 
 endif
 
 #ldflags
-LDFLAGS=-lpthread -lm -rdynamic -levent -levent_pthreads
+LDFLAGS=-lpthread -lm

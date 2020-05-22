@@ -8,6 +8,7 @@
 //#define FHT_USE_PRIMES
 //#define FHT_STATS
 #define FHT_ALWAYS_REHASH
+//#define FHT_FULL_TAG
 //#define FHT_HASH_ATTEMPTS 2
 
 #if defined FHT_HASH_ATTEMPTS && !defined FHT_ALWAYS_REHASH
