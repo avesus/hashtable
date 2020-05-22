@@ -14,11 +14,11 @@
 //////////////////////////////////////////////////////////////////////
 #include <general-config.h>
 #include <helpers/arg.h>
-#include <helpers/util.h>
 //////////////////////////////////////////////////////////////////////
 
 #define FALSE 0
 #define TRUE  (!FALSE)
+
 
 static char *       commandLine;
 static const char * pname;
@@ -90,7 +90,7 @@ arg2str(ArgOption * desc) {
 
         default:
             // new type that we didn't implement yet?
-            DBG_ASSERT(0, "Unkown argument type: %d\n", desc->type);
+            assert(0);
     }
     if (desc->kind == KindRest) {
         strncpy(p, "...", strlen("..."));
@@ -198,7 +198,6 @@ makeCommandline(int32_t argc, char ** argv) {
         p[len++] = ' ';
     }
     p[len - 1] = 0;
-    PRINT(HIGH_VERBOSE, "[%s]\n", p);
     commandLine = p;
 }
 
@@ -213,7 +212,6 @@ assignArg(ArgOption * desc,
           int32_t     offset) {
     switch (desc->type) {
         case Increment:
-            PRINT(HIGH_VERBOSE, "incremement %s\n", desc->longarg);
             {
                 int32_t * p = (int32_t *)desc->dest;
                 (*p)++;
@@ -223,7 +221,6 @@ assignArg(ArgOption * desc,
         case Function:
             // call function with point32_ter to argv.  Expect # of argv
             // consumed as return result.
-            PRINT(HIGH_VERBOSE, "calling function %s\n", desc->longarg);
             {
                 argOptionParser aop      = (argOptionParser)desc->dest;
                 const char *    ret      = (*aop)(argc, argv);
@@ -233,10 +230,6 @@ assignArg(ArgOption * desc,
             break;
 
         case String:
-            PRINT(HIGH_VERBOSE,
-                  "Saving %s to %s\n",
-                  argv[offset],
-                  desc->longarg);
             {
                 char ** p = (char **)desc->dest;
                 *p        = argv[offset];
@@ -245,7 +238,6 @@ assignArg(ArgOption * desc,
             break;
 
         case Set:
-            PRINT(HIGH_VERBOSE, "Setting %s to 1\n", desc->longarg);
             {
                 int32_t * p = (int32_t *)desc->dest;
                 *p          = 1;
@@ -253,7 +245,6 @@ assignArg(ArgOption * desc,
             break;
 
         case Toggle:
-            PRINT(HIGH_VERBOSE, "toggeling %s\n", desc->longarg);
             {
                 int32_t * p = (int32_t *)desc->dest;
                 *p          = !(*p);
@@ -261,10 +252,6 @@ assignArg(ArgOption * desc,
             break;
 
         case Double:
-            PRINT(HIGH_VERBOSE,
-                  "double -> [%s] = %lf\n",
-                  desc->longarg,
-                  atof(argv[offset]));
             {
                 double * p = (double *)desc->dest;
                 *p         = atof(argv[offset]);
@@ -273,10 +260,6 @@ assignArg(ArgOption * desc,
             break;
 
         case Integer:
-            PRINT(HIGH_VERBOSE,
-                  "int32_t -> [%s] = %d\n",
-                  desc->longarg,
-                  atoi(argv[offset]));
             {
                 int32_t * p = (int32_t *)desc->dest;
                 *p          = atoi(argv[offset]);
@@ -309,7 +292,7 @@ kind2str(ArgKind k) {
         case KindRest:
             return "Rest";
         default:
-            DBG_ASSERT(0, "Unkown Kind\n");
+            assert(0);
     }
     return "Unknown";
 }
@@ -366,8 +349,8 @@ parseArgs(int32_t argc, char ** argv, ArgDefs * def) {
 
 ArgParser *
 createArgumentParser(ArgDefs * def) {
-    ArgParser * ap      = (ArgParser *)mycalloc(1, sizeof(ArgParser));
-    ap->parsers         = (ArgParserNode *)mycalloc(1, sizeof(ArgParserNode));
+    ArgParser * ap      = (ArgParser *)calloc(1, sizeof(ArgParser));
+    ap->parsers         = (ArgParserNode *)calloc(1, sizeof(ArgParserNode));
     ap->parsers->parser = def;
     ap->parsers->main   = 1;
     ap->mainProg        = def;
@@ -387,7 +370,7 @@ freeArgumentParser(ArgParser * ap) {
 
 void
 addArgumentParser(ArgParser * ap, ArgDefs * def, int32_t order) {
-    ArgParserNode * p = (ArgParserNode *)mycalloc(1, sizeof(ArgParserNode));
+    ArgParserNode * p = (ArgParserNode *)calloc(1, sizeof(ArgParserNode));
     p->parser         = def;
     p->next           = NULL;
     p->main           = 0;
@@ -415,12 +398,10 @@ parseArguments(ArgParser * ap, int32_t argc, char ** argv) {
     checkArgParser(ap);
 
     // process args
-    PRINT(HIGH_VERBOSE, "Processing args for %s: %d\n", pname, argc);
     int32_t  i;
     uint32_t optionsPossible = TRUE;
     for (i = 0; (i < argc) && optionsPossible; i++) {
         char * arg = argv[i];
-        PRINT(HIGH_VERBOSE, "%d -> [%s]\n", i, arg);
         if (arg[0] == '-') {
             // Handle options
             uint32_t ok       = FALSE;
@@ -462,7 +443,7 @@ parseArguments(ArgParser * ap, int32_t argc, char ** argv) {
             break;
         }
     }
-    DBG_ASSERT(desc != NULL, "No main parser node\n");
+    assert(desc != NULL);
     int32_t baseArg = i;
     int32_t baseDestOffset;
     for (baseDestOffset = 0; desc[baseDestOffset].kind != KindEnd;
@@ -473,19 +454,9 @@ parseArguments(ArgParser * ap, int32_t argc, char ** argv) {
     }
     // base is first positional arg we are passed, j is first descriptor for
     // positional arg
-    PRINT(HIGH_VERBOSE,
-          "start pos: j=%d %s kind=%d basearg=%d\n",
-          baseDestOffset,
-          desc[baseDestOffset].longarg,
-          desc[baseDestOffset].type,
-          baseArg);
     int32_t j = 0; /* positional offset */
     while ((desc[baseDestOffset + j].kind == KindPositional) &&
            ((baseArg + j) < argc)) {
-        PRINT(HIGH_VERBOSE,
-              "%d: %s\n",
-              j,
-              baseArg + desc[baseDestOffset + j].longarg);
         int32_t consumed = assignArg(desc + baseDestOffset + j,
                                      argc - (baseArg + j),
                                      argv + baseArg + j,

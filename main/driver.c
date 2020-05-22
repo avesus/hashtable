@@ -1,5 +1,80 @@
 #include "driver.h"
 
+#define myfree free
+#define PRINT(V_LEVEL, ...)                                                    \
+    {                                                                          \
+        if (verbose >= V_LEVEL) {                                              \
+            fprintf(stderr, __VA_ARGS__);                                      \
+        }                                                                      \
+    }
+//////////////////////////////////////////////////////////////////////
+// Timing unit conversion stuff
+#define unit_change (1000)
+#define ns_per_sec (unit_change * unit_change * unit_change)
+uint64_t
+to_nsecs(struct timespec t) {
+    return (t.tv_sec * ns_per_sec + (uint64_t)t.tv_nsec);
+}
+
+uint64_t
+ns_diff(struct timespec t1, struct timespec t2) {
+    return (to_nsecs(t1) - to_nsecs(t2));
+}
+
+
+uint64_t
+to_usecs(struct timespec t) {
+    return to_nsecs(t) / unit_change;
+}
+
+uint64_t
+us_diff(struct timespec t1, struct timespec t2) {
+    return ns_diff(t1, t2) / (unit_change);
+}
+
+
+uint64_t
+to_msecs(struct timespec t) {
+    return to_nsecs(t) / (unit_change * unit_change);
+}
+
+uint64_t
+ms_diff(struct timespec t1, struct timespec t2) {
+    return ns_diff(t1, t2) / (unit_change * unit_change);
+}
+
+
+uint64_t
+to_secs(struct timespec t) {
+    return to_nsecs(t) / (unit_change * unit_change * unit_change);
+}
+
+uint64_t
+s_diff(struct timespec t1, struct timespec t2) {
+    return ns_diff(t1, t2) / (unit_change * unit_change * unit_change);
+}
+
+
+uint32_t
+bitcount_64(uint64_t v) {
+    uint64_t c;
+    c = v - ((v >> 1) & 0x5555555555555555UL);
+    c = ((c >> 2) & 0x3333333333333333UL) + (c & 0x3333333333333333UL);
+    c = ((c >> 4) + c) & 0x0F0F0F0F0F0F0F0FUL;
+    c = ((c >> 8) + c) & 0x00FF00FF00FF00FFUL;
+    c = ((c >> 16) + c) & 0x0000FFFF0000FFFFUL;
+    c = ((c >> 32) + c) & 0x00000000FFFFFFFFUL;
+    return c;
+}
+
+// just a wrapper for getting time with rdtsc
+uint64_t
+grabTSC() {
+    unsigned hi, lo;
+    __asm__ __volatile__("rdtsc" : "=a"(lo), "=d"(hi));
+    return (((uint64_t)lo) | (((uint64_t)hi) << 32));
+}
+
 typedef struct test_node {
     uint32_t key;
     uint32_t val;
@@ -71,16 +146,14 @@ static void correct_test();
 static void test_spread();
 int
 main(int argc, char ** argv) {
-    progname = argv[0];
 
     srand(rseed);
     srandom(rseed);
 
-    INIT_DEBUGGER;
 
     ArgParser * ap = createArgumentParser(&argp);
     if (parseArguments(ap, argc, argv)) {
-        die("Error parsing arguments");
+        assert(0);
     }
     freeCommandLine();
     freeArgumentParser(ap);
@@ -100,7 +173,7 @@ main(int argc, char ** argv) {
 
     // init random nodes
     test_node_t * test_nodes =
-        (test_node_t *)mycalloc(FHT_TEST_SIZE, sizeof(test_node_t));
+        (test_node_t *)calloc(FHT_TEST_SIZE, sizeof(test_node_t));
 
     for (uint32_t i = 0; i < FHT_TEST_SIZE; i++) {
         (test_nodes + i)->key = random();
@@ -109,7 +182,7 @@ main(int argc, char ** argv) {
 
     // init random keys (with varying degree of likely hood to be in table)
     uint32_t * test_keys =
-        (uint32_t *)mycalloc(FHT_TEST_SIZE * Q_PER_INS, sizeof(uint32_t));
+        (uint32_t *)calloc(FHT_TEST_SIZE * Q_PER_INS, sizeof(uint32_t));
     for (uint32_t i = 0; i < FHT_TEST_SIZE * Q_PER_INS; i++) {
         test_keys[i] = test_nodes[random() % FHT_TEST_SIZE].key;
     }
@@ -178,7 +251,6 @@ main(int argc, char ** argv) {
             ns_diff(end, start));
 
 
-    FREE_DEBUGGER;
     return 0;
 }
 
@@ -187,11 +259,11 @@ main(int argc, char ** argv) {
 static void
 correct_test() {
 
-    uint8_t * taken        = (uint8_t *)mycalloc((1 << 25), sizeof(uint32_t));
+    uint8_t * taken        = (uint8_t *)calloc((1 << 25), sizeof(uint32_t));
     uint32_t  total_unique = 0;
     fht_table<uint32_t, uint32_t> table;
     test_node_t *                 test_nodes =
-        (test_node_t *)mycalloc(2 * FHT_TEST_SIZE, sizeof(test_node_t));
+        (test_node_t *)calloc(2 * FHT_TEST_SIZE, sizeof(test_node_t));
     for (uint32_t i = 0; i < FHT_TEST_SIZE; i++) {
         uint32_t rnum         = random() % (1 << 25);
         (test_nodes + i)->key = rnum;
@@ -358,7 +430,7 @@ test_spread() {
     // generate primes up to some reasonable value (basically stopping when * 64
     // would overflow)
     const uint32_t max_prime = 1 << 12;
-    uint32_t *     sieve = (uint32_t *)mycalloc(max_prime, sizeof(uint32_t));
+    uint32_t *     sieve = (uint32_t *)calloc(max_prime, sizeof(uint32_t));
 
     uint32_t max_prime_sqrt = (uint32_t)(sqrt((double)max_prime) + 1);
     uint32_t nprimes        = max_prime - 2;
@@ -373,7 +445,7 @@ test_spread() {
             nprimes--;
         }
     }
-    uint32_t * primes = (uint32_t *)mycalloc(nprimes, sizeof(uint32_t));
+    uint32_t * primes = (uint32_t *)calloc(nprimes, sizeof(uint32_t));
 
     uint32_t iter = 0;
     for (uint32_t i = 0; i < max_prime; i++) {

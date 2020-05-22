@@ -1,8 +1,86 @@
 #ifndef _FHT_HT_H_
 #define _FHT_HT_H_
 
-#include <helpers/opt.h>
-#include <helpers/util.h>
+#include <sys/mman.h>
+#include <assert.h>
+#include <errno.h>
+#include <stdlib.h>
+#include <stdio.h>
+
+
+static uint32_t
+ulog2_64(uint64_t n) {
+    uint64_t s, t;
+    t = (n > 0xffffffff) << 5;
+    n >>= t;
+    t = (n > 0xffff) << 4;
+    n >>= t;
+    s = (n > 0xff) << 3;
+    n >>= s, t |= s;
+    s = (n > 0xf) << 2;
+    n >>= s, t |= s;
+    s = (n > 0x3) << 1;
+    n >>= s, t |= s;
+    return (t | (n >> 1));
+}
+
+static uint32_t
+roundup_32(uint32_t v) {
+    v--;
+    v |= v >> 1;
+    v |= v >> 2;
+    v |= v >> 4;
+    v |= v >> 8;
+    v |= v >> 16;
+    v++;
+    return v;
+}
+
+
+
+void *
+myMmap(void *        addr,
+       uint64_t      length,
+       int32_t       prot_flags,
+       int32_t       mmap_flags,
+       int32_t       fd,
+       int32_t       offset,
+       const char *  fname,
+       const int32_t ln) {
+
+    void * p = mmap(addr, length, prot_flags, mmap_flags, fd, offset);
+    if (p == MAP_FAILED && length) {
+        assert(0);
+    }
+    return p;
+}
+
+void
+myMunmap(void * addr, uint64_t length, const char * fname, const int32_t ln) {
+    if (addr && length) {
+        if ((((uint64_t)addr) % PAGE_SIZE) != 0) {
+            assert(0);
+        }
+
+        if (munmap(addr, length) == -1) {
+            assert(0);
+        }
+    }
+}
+
+
+// allocation with mmap
+#define mymmap_alloc(X)                                                        \
+    myMmap(NULL,                                                               \
+           (X),                                                                \
+           (PROT_READ | PROT_WRITE),                                           \
+           (MAP_ANONYMOUS | MAP_PRIVATE),                                      \
+           -1,                                                                 \
+           0,                                                                  \
+           __FILE__,                                                           \
+           __LINE__)
+
+#define mymunmap(X, Y) myMunmap((X), (Y), __FILE__, __LINE__)
 
 
 // tunable
@@ -25,15 +103,13 @@ typedef uint8_t tag_type_t;
 template<typename K, typename V>
 struct fht_node {
     K key;
-    union {
     V val;
-        uint64_t wasted;
-    };
 };
 
 template<typename K, typename V>
 struct fht_chunk {
     tag_type_t     tags[L1_CACHE_LINE_SIZE];
+
     fht_node<K, V> nodes[L1_CACHE_LINE_SIZE];
 };
 
@@ -227,13 +303,11 @@ fht_table<K, V, Hasher>::resize() {
         tag_type_t * const new_tags[2] = { new_chunks[i].tags,
                                            new_chunks[i + _num_chunks].tags };
 
-        uint32_t in = 0;
         for (uint32_t j = 0; j < FHT_NODES_PER_CACHE_LINE; j++) {
             if (RESIZE_SKIP(tags[j])) {
                 continue;
             }
 
-            in++;
             const tag_type_t tag = tags[j];
 
             // annoying that we need to access object. C++ needs a better way to
@@ -249,12 +323,10 @@ fht_table<K, V, Hasher>::resize() {
                     SET_KEY_VAL(new_nodes[next_bit][test_idx],
                                 nodes[j].key,
                                 nodes[j].val);
-                    in--;
                     break;
                 }
             }
         }
-        assert(!in);
     }
 
     mymunmap((void *)old_chunks,

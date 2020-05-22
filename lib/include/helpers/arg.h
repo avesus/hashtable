@@ -9,7 +9,6 @@
 
 //////////////////////////////////////////////////////////////////////
 #include <general-config.h>
-#include <helpers/util.h>
 //////////////////////////////////////////////////////////////////////
 
 ////////////////////////////////////////////////////////////////
@@ -44,7 +43,6 @@ typedef enum {
     KindOption     = 0,
     KindRest       = 3
 } ArgKind;
-
 
 // type of function that handles option parsing for type Function.
 // gets # of args left and point32_ter to argv.  if argv == NULL return
