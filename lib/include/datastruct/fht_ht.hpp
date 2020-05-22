@@ -335,25 +335,20 @@ fht_table<K, V, Hasher>::resize() {
     const uint32_t                _new_log_incr = ++(this->log_incr);
     const fht_chunk<K, V> * const old_chunks    = this->chunks;
 
-    fht_chunk<K, V> * const new_chunks = (fht_chunk<K, V> *)mymmap_alloc(
-        ((1 << (_new_log_incr)) / FHT_NODES_PER_CACHE_LINE) *
-        sizeof(fht_chunk<K, V>));
-    this->chunks = new_chunks;
-
     const uint32_t _num_chunks =
         (1 << (_new_log_incr - 1)) / FHT_NODES_PER_CACHE_LINE;
+
+    fht_chunk<K, V> * const new_chunks = (fht_chunk<K, V> *)mymmap_alloc(
+        (2 * _num_chunks) * sizeof(fht_chunk<K, V>));
+
+    // set this while its definetly still in cache
+    this->chunks = new_chunks;
+
 
     for (uint32_t i = 0; i < _num_chunks; i++) {
         const fht_node<K, V> * const nodes = old_chunks[i].nodes;
         const tag_type_t * const     tags  = old_chunks[i].tags;
 
-        fht_node<K, V> * const new_nodes[2] = {
-            new_chunks[i].nodes,
-            new_chunks[i + _num_chunks].nodes
-        };
-
-        tag_type_t * const new_tags[2] = { new_chunks[i].tags,
-                                           new_chunks[i + _num_chunks].tags };
 
         for (uint32_t j = 0; j < FHT_NODES_PER_CACHE_LINE; j++) {
             FHT_STATS_INCR(resize_iter);
@@ -369,14 +364,24 @@ fht_table<K, V, Hasher>::resize() {
             // do this.
             const uint32_t raw_slot  = this->hash_32(nodes[j].key);
             const uint32_t start_idx = GEN_START_IDX(raw_slot);
-            const uint32_t next_bit  = GET_NTH_BIT(raw_slot, _new_log_incr - 1);
+            
+            tag_type_t * const new_tags =
+                new_chunks[i | (GET_NTH_BIT(raw_slot, _new_log_incr - 1)
+                                    ? _num_chunks
+                                    : 0)]
+                    .tags;
+            fht_node<K, V> * const new_nodes =
+                new_chunks[i | (GET_NTH_BIT(raw_slot, _new_log_incr - 1)
+                                    ? _num_chunks
+                                    : 0)]
+                    .nodes;
 
             for (uint32_t new_j = 0; new_j < FHT_SEARCH_NUMBER; new_j++) {
                 FHT_STATS_INCR(resize_sub_iter);
                 const uint32_t test_idx = GEN_TEST_IDX(start_idx, new_j);
-                if (!IS_VALID(new_tags[next_bit][test_idx])) {
-                    new_tags[next_bit][test_idx] = tag;
-                    SET_KEY_VAL(new_nodes[next_bit][test_idx],
+                if (__builtin_expect(!IS_VALID(new_tags[test_idx]), 1)) {
+                    new_tags[test_idx] = tag;
+                    SET_KEY_VAL(new_nodes[test_idx],
                                 nodes[j].key,
                                 nodes[j].val);
                     break;
@@ -421,7 +426,7 @@ fht_table<K, V, Hasher>::add(const K new_key, const V new_val) {
         // seeded with start_idx we go through idx function
         const uint32_t test_idx = GEN_TEST_IDX(start_idx, j);
 
-        if (!IS_VALID(tags[test_idx])) {
+        if (__builtin_expect(!IS_VALID(tags[test_idx]), 1)) {
             FHT_STATS_INCR(add_tag_match);
             tags[test_idx] = (tag | VALID_MASK);
             SET_KEY_VAL(nodes[test_idx], new_key, new_val);
@@ -455,7 +460,7 @@ fht_table<K, V, Hasher>::add(const K new_key, const V new_val) {
     for (uint32_t j = 0; j < FHT_SEARCH_NUMBER; j++) {
         FHT_STATS_INCR(add_resize_iter);
         const uint32_t test_idx = GEN_TEST_IDX(start_idx, j);
-        if (!IS_VALID(new_tags[test_idx])) {
+        if (__builtin_expect(!IS_VALID(new_tags[test_idx]), 1)) {
             FHT_STATS_INCR(add_tag_match);
             new_tags[test_idx] = (tag | VALID_MASK);
             SET_KEY_VAL(new_nodes[test_idx], new_key, new_val);
@@ -496,7 +501,7 @@ fht_table<K, V, Hasher>::find(const K key) {
         FHT_STATS_INCR(find_iter);
         // seeded with start_idx we go through idx function
         const uint32_t test_idx = GEN_TEST_IDX(start_idx, j);
-        if (!IS_VALID(tags[test_idx])) {
+        if (__builtin_expect(!IS_VALID(tags[test_idx]), 1)) {
             FHT_STATS_INCR(find_tag_match);
             return FHT_NOT_FOUND;
         }
@@ -545,7 +550,7 @@ fht_table<K, V, Hasher>::remove(const K key) {
         FHT_STATS_INCR(remove_iter);
         // seeded with start_idx we go through idx function
         const uint32_t test_idx = GEN_TEST_IDX(start_idx, j);
-        if (!IS_VALID(tags[test_idx])) {
+        if (__builtin_expect(!IS_VALID(tags[test_idx]), 1)) {
             FHT_STATS_INCR(remove_tag_match);
             return FHT_NOT_DELETED;
         }

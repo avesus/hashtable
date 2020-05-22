@@ -204,7 +204,7 @@ main(int argc, char ** argv) {
         volatile uint32_t sink = counter;
     }
     else {
-        ska::flat_hash_map<uint32_t, uint32_t> table(1 << init_size);
+        ska::flat_hash_map<uint64_t, uint64_t> table(1 << init_size);
         // run perf test
         uint32_t counter = 0;
         clock_gettime(CLOCK_MONOTONIC, &start);
