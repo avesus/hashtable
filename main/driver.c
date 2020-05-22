@@ -10,7 +10,7 @@
 //////////////////////////////////////////////////////////////////////
 // Timing unit conversion stuff
 #define unit_change (1000)
-#define ns_per_sec (unit_change * unit_change * unit_change)
+#define ns_per_sec  (unit_change * unit_change * unit_change)
 uint64_t
 to_nsecs(struct timespec t) {
     return (t.tv_sec * ns_per_sec + (uint64_t)t.tv_nsec);
@@ -144,6 +144,8 @@ udiv(uint64_t num, uint64_t den) {
 
 static void correct_test();
 static void test_spread();
+
+
 int
 main(int argc, char ** argv) {
 
@@ -188,60 +190,35 @@ main(int argc, char ** argv) {
     }
 
     if (which_table == OUR_TABLE) {
-        fht_table<uint32_t, uint64_t> table(1 << init_size);
+        fht_table<uint32_t, uint32_t> table(1 << init_size);
 
         // run perf test
         clock_gettime(CLOCK_MONOTONIC, &start);
+        uint32_t counter = 0;
         for (uint32_t i = 0; i < FHT_TEST_SIZE; i++) {
-            table.add((test_nodes + i)->key, (test_nodes + i)->val);
+            counter ^= table.add((test_nodes + i)->key, (test_nodes + i)->val);
             for (uint32_t j = i * Q_PER_INS; j < (i + 1) * Q_PER_INS; j++) {
-                table.find(test_keys[j]);
+                counter ^= table.find(test_keys[j]);
             }
         }
+        volatile uint32_t sink = counter;
     }
     else {
-        ska::flat_hash_map<int32_t, int32_t> table(1 << init_size);
+        ska::flat_hash_map<uint32_t, uint32_t> table(1 << init_size);
         // run perf test
+        uint32_t counter = 0;
         clock_gettime(CLOCK_MONOTONIC, &start);
         for (uint32_t i = 0; i < FHT_TEST_SIZE; i++) {
             table[test_nodes[i].key] = test_nodes[i].val;
             for (uint32_t j = i * Q_PER_INS; j < (i + 1) * Q_PER_INS; j++) {
-                table.find(test_keys[j]);
+                volatile auto res = table.find(test_keys[j]);
             }
         }
+        volatile uint32_t sink = counter;
     }
 
 
     clock_gettime(CLOCK_MONOTONIC, &end);
-#ifdef FHT_STATS
-    fprintf(stderr,
-            "Match: %.3lf\n"
-            "Nadd : %lu\n\t\t"
-            "LAdd : %.3lf\n\t\t"
-            "FAdd : %.3lf\n\t\t"
-            "SAdd : %.3lf\n"
-            "Nfind: %lu\n\t\t"
-            "LFind: %.3lf\n\t\t"
-            "FFind: %.3lf\n\t\t"
-            "SFind: %.3lf\n"
-            "Res  : %.3lf\n\t\t"
-            "Inv  : %lu\n\t\t"
-            "Del  : %lu\n\t\t"
-            "Good : %lu\n",
-            udiv(false_tag_matches, tag_matches),
-            nadd,
-            udiv(niter_add, natt_add),
-            udiv(fail_add, nadd),
-            udiv(success_add, nadd),
-            nfind,
-            udiv(niter_find, natt_find),
-            udiv(fail_find, nfind),
-            udiv(success_find, nfind),
-            udiv(niter_resize, natt_resize),
-            invalid_resize,
-            deleted_resize,
-            good_resize);
-#endif
 
     fprintf(stderr,
             "S : %lu\nMS: %lu\nUS: %lu\nNS: %lu\n",
@@ -430,7 +407,7 @@ test_spread() {
     // generate primes up to some reasonable value (basically stopping when * 64
     // would overflow)
     const uint32_t max_prime = 1 << 12;
-    uint32_t *     sieve = (uint32_t *)calloc(max_prime, sizeof(uint32_t));
+    uint32_t *     sieve     = (uint32_t *)calloc(max_prime, sizeof(uint32_t));
 
     uint32_t max_prime_sqrt = (uint32_t)(sqrt((double)max_prime) + 1);
     uint32_t nprimes        = max_prime - 2;

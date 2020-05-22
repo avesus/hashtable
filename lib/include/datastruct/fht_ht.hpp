@@ -1,11 +1,11 @@
 #ifndef _FHT_HT_H_
 #define _FHT_HT_H_
 
-#include <sys/mman.h>
 #include <assert.h>
 #include <errno.h>
-#include <stdlib.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <sys/mman.h>
 
 
 static uint32_t
@@ -37,8 +37,7 @@ roundup_32(uint32_t v) {
 }
 
 
-
-void *
+static void *
 myMmap(void *        addr,
        uint64_t      length,
        int32_t       prot_flags,
@@ -55,7 +54,7 @@ myMmap(void *        addr,
     return p;
 }
 
-void
+static void
 myMunmap(void * addr, uint64_t length, const char * fname, const int32_t ln) {
     if (addr && length) {
         if ((((uint64_t)addr) % PAGE_SIZE) != 0) {
@@ -83,6 +82,16 @@ myMunmap(void * addr, uint64_t length, const char * fname, const int32_t ln) {
 #define mymunmap(X, Y) myMunmap((X), (Y), __FILE__, __LINE__)
 
 
+//#define FHT_STATS
+#ifdef FHT_STATS
+#define FHT_STATS_INCR(X) this->X++
+#define FHT_STATS_SUMMARY this->stats_summary()
+#else
+#define FHT_STATS_INCR(X)
+#define FHT_STATS_SUMMARY
+#endif
+
+
 // tunable
 const uint32_t FHT_DEFAULT_INIT_SIZE = PAGE_SIZE;
 const uint32_t FHT_HASH_SEED         = 0;
@@ -108,13 +117,12 @@ struct fht_node {
 
 template<typename K, typename V>
 struct fht_chunk {
-    tag_type_t     tags[L1_CACHE_LINE_SIZE];
+    tag_type_t tags[L1_CACHE_LINE_SIZE];
 
     fht_node<K, V> nodes[L1_CACHE_LINE_SIZE];
 };
 
-static const uint32_t
-murmur3_32(const uint8_t * key, const uint32_t len);
+static const uint32_t murmur3_32(const uint8_t * key, const uint32_t len);
 template<typename K>
 struct DEFAULT_HASH_32 {
 
@@ -131,6 +139,46 @@ class fht_table {
     uint32_t          log_incr;
     Hasher            hash_32;
 
+#ifdef FHT_STATS
+    uint64_t add_att;
+    uint64_t find_att;
+    uint64_t remove_att;
+
+    uint64_t add_iter;
+    uint64_t add_success;
+    uint64_t add_duplicate;
+    uint64_t add_tag_removed;
+    uint64_t add_tag_match;
+    uint64_t add_tag_fail;
+    uint64_t add_tag_success;
+
+    uint64_t add_resize_att;
+    uint64_t add_resize_iter;
+
+    uint64_t find_iter;
+    uint64_t find_complete;
+    uint64_t find_tag_removed;
+    uint64_t find_tag_match;
+    uint64_t find_tag_fail;
+    uint64_t find_tag_success;
+
+    uint64_t remove_iter;
+    uint64_t remove_complete;
+    uint64_t remove_tag_removed;
+    uint64_t remove_tag_match;
+    uint64_t remove_tag_fail;
+    uint64_t remove_tag_success;
+
+    uint64_t resize_att;
+    uint64_t resize_iter;
+    uint64_t resize_sub_iter;
+    uint64_t resize_invalid;
+    uint64_t resize_valid;
+    double   u64div(uint64_t num, uint64_t den);
+    void     stats_summary();
+#endif
+
+
     fht_chunk<K, V> * const resize();
 
    public:
@@ -146,7 +194,7 @@ class fht_table {
 
 
 //////////////////////////////////////////////////////////////////////
-//Actual Implemenation cuz templating kinda sucks imo
+// Actual Implemenation cuz templating kinda sucks imo
 //////////////////////////////////////////////////////////////////////
 // Constants
 #define FHT_NODES_PER_CACHE_LINE     L1_CACHE_LINE_SIZE
@@ -206,6 +254,9 @@ class fht_table {
 // Constructor / Destructor
 template<typename K, typename V, typename Hasher>
 fht_table<K, V, Hasher>::fht_table(const uint32_t init_size) {
+#ifdef FHT_STATS
+    memset(this, 0, sizeof(fht_table));
+#endif
     const uint64_t _init_size =
         init_size > FHT_DEFAULT_INIT_SIZE
             ? (init_size ? roundup_32(init_size) : FHT_DEFAULT_INIT_SIZE)
@@ -225,6 +276,7 @@ fht_table<K, V, Hasher>::fht_table() : fht_table(FHT_DEFAULT_INIT_SIZE) {}
 
 template<typename K, typename V, typename Hasher>
 fht_table<K, V, Hasher>::~fht_table() {
+    FHT_STATS_SUMMARY;
     mymunmap(this->chunks,
              ((1 << (this->log_incr)) / FHT_NODES_PER_CACHE_LINE) *
                  sizeof(fht_chunk<K, V>));
@@ -233,7 +285,6 @@ fht_table<K, V, Hasher>::~fht_table() {
 
 //////////////////////////////////////////////////////////////////////
 // Default hash function
-
 static const uint32_t
 murmur3_32(const uint8_t * key, const uint32_t len) {
     uint32_t h = FHT_HASH_SEED;
@@ -280,6 +331,7 @@ murmur3_32(const uint8_t * key, const uint32_t len) {
 template<typename K, typename V, typename Hasher>
 fht_chunk<K, V> * const
 fht_table<K, V, Hasher>::resize() {
+    FHT_STATS_INCR(resize_att);
     const uint32_t                _new_log_incr = ++(this->log_incr);
     const fht_chunk<K, V> * const old_chunks    = this->chunks;
 
@@ -304,9 +356,12 @@ fht_table<K, V, Hasher>::resize() {
                                            new_chunks[i + _num_chunks].tags };
 
         for (uint32_t j = 0; j < FHT_NODES_PER_CACHE_LINE; j++) {
+            FHT_STATS_INCR(resize_iter);
             if (RESIZE_SKIP(tags[j])) {
+                FHT_STATS_INCR(resize_invalid);
                 continue;
             }
+            FHT_STATS_INCR(resize_valid);
 
             const tag_type_t tag = tags[j];
 
@@ -317,6 +372,7 @@ fht_table<K, V, Hasher>::resize() {
             const uint32_t next_bit  = GET_NTH_BIT(raw_slot, _new_log_incr - 1);
 
             for (uint32_t new_j = 0; new_j < FHT_SEARCH_NUMBER; new_j++) {
+                FHT_STATS_INCR(resize_sub_iter);
                 const uint32_t test_idx = GEN_TEST_IDX(start_idx, new_j);
                 if (!IS_VALID(new_tags[next_bit][test_idx])) {
                     new_tags[next_bit][test_idx] = tag;
@@ -341,6 +397,7 @@ fht_table<K, V, Hasher>::resize() {
 template<typename K, typename V, typename Hasher>
 uint32_t
 fht_table<K, V, Hasher>::add(const K new_key, const V new_val) {
+    FHT_STATS_INCR(add_att);
     const uint32_t          _log_incr = this->log_incr;
     fht_chunk<K, V> * const chunks    = this->chunks;
     const uint32_t          raw_slot  = this->hash_32(new_key);
@@ -360,22 +417,28 @@ fht_table<K, V, Hasher>::add(const K new_key, const V new_val) {
 
     // check for valid slot of duplicate
     for (uint32_t j = 0; j < FHT_SEARCH_NUMBER; j++) {
+        FHT_STATS_INCR(add_iter);
         // seeded with start_idx we go through idx function
         const uint32_t test_idx = GEN_TEST_IDX(start_idx, j);
 
         if (!IS_VALID(tags[test_idx])) {
+            FHT_STATS_INCR(add_tag_match);
             tags[test_idx] = (tag | VALID_MASK);
             SET_KEY_VAL(nodes[test_idx], new_key, new_val);
             return FHT_ADDED;
         }
         else if ((GET_CONTENT(tags[test_idx]) == tag)) {
             if (COMPARE_KEYS(nodes[test_idx].key, new_key)) {
+                FHT_STATS_INCR(add_tag_success);
                 if (IS_DELETED(tags[test_idx])) {
                     SET_UNDELETED(tags[test_idx]);
+                    FHT_STATS_INCR(add_tag_removed);
                     return FHT_ADDED;
                 }
+                FHT_STATS_INCR(add_duplicate);
                 return FHT_NOT_ADDED;
             }
+            FHT_STATS_INCR(add_tag_fail);
         }
     }
 
@@ -387,10 +450,13 @@ fht_table<K, V, Hasher>::add(const K new_key, const V new_val) {
     fht_node<K, V> * const new_nodes =
         (fht_node<K, V> * const)(new_tags + FHT_NODES_PER_CACHE_LINE);
 
+    FHT_STATS_INCR(add_resize_att);
     // after resize add without duplication check
     for (uint32_t j = 0; j < FHT_SEARCH_NUMBER; j++) {
+        FHT_STATS_INCR(add_resize_iter);
         const uint32_t test_idx = GEN_TEST_IDX(start_idx, j);
         if (!IS_VALID(new_tags[test_idx])) {
+            FHT_STATS_INCR(add_tag_match);
             new_tags[test_idx] = (tag | VALID_MASK);
             SET_KEY_VAL(new_nodes[test_idx], new_key, new_val);
             return FHT_ADDED;
@@ -407,6 +473,7 @@ fht_table<K, V, Hasher>::add(const K new_key, const V new_val) {
 template<typename K, typename V, typename Hasher>
 uint32_t
 fht_table<K, V, Hasher>::find(const K key) {
+    FHT_STATS_INCR(find_att);
     const uint32_t                _log_incr = this->log_incr;
     const fht_chunk<K, V> * const chunks    = this->chunks;
     const uint32_t                raw_slot  = this->hash_32(key);
@@ -426,20 +493,26 @@ fht_table<K, V, Hasher>::find(const K key) {
 
     // check for valid slot of duplicate
     for (uint32_t j = 0; j < FHT_SEARCH_NUMBER; j++) {
+        FHT_STATS_INCR(find_iter);
         // seeded with start_idx we go through idx function
         const uint32_t test_idx = GEN_TEST_IDX(start_idx, j);
         if (!IS_VALID(tags[test_idx])) {
+            FHT_STATS_INCR(find_tag_match);
             return FHT_NOT_FOUND;
         }
         else if ((GET_CONTENT(tags[test_idx]) == tag)) {
             if (COMPARE_KEYS(nodes[test_idx].key, key)) {
+                FHT_STATS_INCR(find_tag_success);
                 if (IS_DELETED(tags[test_idx])) {
+                    FHT_STATS_INCR(find_tag_removed);
                     return FHT_NOT_FOUND;
                 }
                 return FHT_FOUND;
             }
+            FHT_STATS_INCR(find_tag_fail);
         }
     }
+    FHT_STATS_INCR(find_complete);
     return FHT_NOT_FOUND;
 }
 //////////////////////////////////////////////////////////////////////
@@ -449,6 +522,7 @@ fht_table<K, V, Hasher>::find(const K key) {
 template<typename K, typename V, typename Hasher>
 uint32_t
 fht_table<K, V, Hasher>::remove(const K key) {
+    FHT_STATS_INCR(remove_att);
     const uint32_t                _log_incr = this->log_incr;
     const fht_chunk<K, V> * const chunks    = this->chunks;
     const uint32_t                raw_slot  = this->hash_32(key);
@@ -468,26 +542,237 @@ fht_table<K, V, Hasher>::remove(const K key) {
 
     // check for valid slot of duplicate
     for (uint32_t j = 0; j < FHT_SEARCH_NUMBER; j++) {
+        FHT_STATS_INCR(remove_iter);
         // seeded with start_idx we go through idx function
         const uint32_t test_idx = GEN_TEST_IDX(start_idx, j);
         if (!IS_VALID(tags[test_idx])) {
+            FHT_STATS_INCR(remove_tag_match);
             return FHT_NOT_DELETED;
         }
         else if ((GET_CONTENT(tags[test_idx]) == tag)) {
             if (COMPARE_KEYS(nodes[test_idx].key, key)) {
+                FHT_STATS_INCR(remove_tag_success);
                 if (IS_DELETED(tags[test_idx])) {
+                    FHT_STATS_INCR(remove_tag_removed);
                     return FHT_NOT_DELETED;
                 }
                 SET_DELETED(tags[test_idx]);
                 return FHT_DELETED;
             }
+            FHT_STATS_INCR(remove_tag_fail);
         }
     }
+    FHT_STATS_INCR(remove_complete);
     return FHT_NOT_FOUND;
 }
 
 
-template class fht_table<uint32_t, uint32_t>;
+//////////////////////////////////////////////////////////////////////
+// Stats
+#ifdef FHT_STATS
+template<typename K, typename V, typename Hasher>
+double
+fht_table<K, V, Hasher>::u64div(uint64_t num, uint64_t den) {
+    return (double)(((double)num) / ((double)den));
+}
+
+template<typename K, typename V, typename Hasher>
+void
+fht_table<K, V, Hasher>::stats_summary() {
+    if (this->add_att) {
+        fprintf(stderr, "\rAdd Stats\n");
+        fprintf(stderr, "\tAttempts     : %lu\n", this->add_att);
+        fprintf(stderr, "\tIter         : %lu\n", this->add_iter);
+        fprintf(stderr,
+                "\t\tIter Avg         : %.3lf\n",
+                this->u64div(this->add_iter, this->add_att));
+        fprintf(stderr, "\tResize Att   : %lu\n", this->add_resize_att);
+        fprintf(stderr, "\tResize Iter  : %lu\n", this->add_resize_iter);
+        fprintf(stderr, "\tDuplicate    : %lu\n", this->add_duplicate);
+        fprintf(stderr,
+                "\t\tDuplicate Rate   : %.3lf\n",
+                this->u64div(this->add_duplicate, this->add_att));
+        fprintf(stderr, "\tSuccess      : %lu\n", this->add_tag_match);
+        fprintf(stderr,
+                "\t\tSuccess Rate     : %.3lf\n",
+                this->u64div(this->add_tag_match, this->add_att));
+        fprintf(stderr, "\tRemoved      : %lu\n", this->add_tag_removed);
+        fprintf(stderr,
+                "\t\tRemoved Rate     : %.3lf\n",
+                this->u64div(this->add_tag_removed, this->add_att));
+
+        fprintf(stderr, "\tTag Match    : %lu\n", this->add_tag_match);
+        fprintf(stderr, "\tTag Fail     : %lu\n", this->add_tag_fail);
+        fprintf(stderr,
+                "\t\tTag Fail Rate    : %.3lf\n",
+                this->u64div(this->add_tag_fail, this->add_tag_match));
+        fprintf(stderr, "\tTag Success  : %lu\n", this->add_tag_success);
+        fprintf(stderr,
+                "\t\tTag Success Rate : %.3lf\n",
+                this->u64div(this->add_tag_success, this->add_tag_match));
+    }
+    if (this->find_att) {
+        fprintf(stderr, "\n\rFind Stats\n");
+        fprintf(stderr, "\tAttempts     : %lu\n", this->find_att);
+        fprintf(stderr, "\tIter         : %lu\n", this->find_iter);
+        fprintf(stderr,
+                "\t\tIter Avg         : %.3lf\n",
+                this->u64div(this->find_iter, this->find_att));
+        fprintf(stderr, "\tComplete     : %lu\n", this->find_complete);
+        fprintf(stderr,
+                "\t\tComplete Rate    : %.3lf\n",
+                this->u64div(this->find_complete, this->find_att));
+        fprintf(stderr, "\tSuccess      : %lu\n", this->find_tag_match);
+        fprintf(stderr,
+                "\t\tSuccess Rate     : %.3lf\n",
+                this->u64div(this->find_tag_match, this->find_att));
+        fprintf(stderr, "\tRemoved      : %lu\n", this->find_tag_removed);
+        fprintf(stderr,
+                "\t\tRemoved Rate     : %.3lf\n",
+                this->u64div(this->find_tag_removed, this->find_att));
+        fprintf(stderr, "\tTag Match    : %lu\n", this->find_tag_match);
+        fprintf(stderr, "\tTag Fail     : %lu\n", this->find_tag_fail);
+        fprintf(stderr,
+                "\t\tTag Fail Rate    : %.3lf\n",
+                this->u64div(this->find_tag_fail, this->find_tag_match));
+        fprintf(stderr, "\tTag Success  : %lu\n", this->find_tag_success);
+        fprintf(stderr,
+                "\t\tTag Success Rate : %.3lf\n",
+                this->u64div(this->find_tag_success, this->find_tag_match));
+    }
+    if (this->remove_att) {
+        fprintf(stderr, "\n\rRemove Stats\n");
+        fprintf(stderr, "\tAttempts     : %lu\n", this->remove_att);
+        fprintf(stderr, "\tIter         : %lu\n", this->remove_iter);
+        fprintf(stderr,
+                "\t\tIter Avg         : %.3lf\n",
+                this->u64div(this->remove_iter, this->remove_att));
+        fprintf(stderr, "\tComplete     : %lu\n", this->remove_complete);
+        fprintf(stderr,
+                "\t\tComplete Rate    : %.3lf\n",
+                this->u64div(this->remove_complete, this->remove_att));
+        fprintf(stderr, "\tSuccess      : %lu\n", this->remove_tag_match);
+        fprintf(stderr,
+                "\t\tSuccess Rate     : %.3lf\n",
+                this->u64div(this->remove_tag_match, this->remove_att));
+        fprintf(stderr, "\tRemoved      : %lu\n", this->remove_tag_removed);
+        fprintf(stderr,
+                "\t\tRemoved Rate     : %.3lf\n",
+                this->u64div(this->remove_tag_removed, this->remove_att));
+        fprintf(stderr, "\tTag Match    : %lu\n", this->remove_tag_match);
+        fprintf(stderr, "\tTag Fail     : %lu\n", this->remove_tag_fail);
+        fprintf(stderr,
+                "\t\tTag Fail Rate    : %.3lf\n",
+                this->u64div(this->remove_tag_fail, this->remove_tag_match));
+        fprintf(stderr, "\tTag Success  : %lu\n", this->remove_tag_success);
+        fprintf(stderr,
+                "\t\tTag Success Rate : %.3lf\n",
+                this->u64div(this->remove_tag_success, this->remove_tag_match));
+    }
+    if (this->resize_att) {
+        fprintf(stderr, "\n\rResize Stats\n");
+        fprintf(stderr, "\tAttempts     : %lu\n", this->resize_att);
+        fprintf(stderr, "\tIter         : %lu\n", this->resize_iter);
+        fprintf(stderr, "\tSub Iter     : %lu\n", this->resize_sub_iter);
+        fprintf(stderr,
+                "\t\tSub Iter Avg     : %.3lf\n",
+                this->u64div(this->resize_sub_iter, this->resize_iter));
+        fprintf(stderr, "\tInvalid      : %lu\n", this->resize_invalid);
+        fprintf(stderr,
+                "\t\tinValid Rate     : %.3lf\n",
+                this->u64div(this->resize_invalid, this->resize_iter));
+        fprintf(stderr, "\tValid        : %lu\n", this->resize_valid);
+        fprintf(stderr,
+                "\t\tValid Rate       : %.3lf\n",
+                this->u64div(this->resize_valid, this->resize_iter));
+    }
+}
+#endif
+
+//////////////////////////////////////////////////////////////////////
+// Various Optimized for Size Hash Functions
+//////////////////////////////////////////////////////////////////////
+// Default hash function
+static const uint32_t
+murmur3_32_4(const uint32_t key) {
+    uint32_t h = FHT_HASH_SEED;
+
+    uint32_t k = key;
+    k *= 0xcc9e2d51;
+    k = (k << 15) | (k >> 17);
+    k *= 0x1b873593;
+    h ^= k;
+    h = (h << 13) | (h >> 19);
+    h = h * 5 + 0xe6546b64;
+
+    h ^= 4;
+    h ^= h >> 16;
+    h *= 0x85ebca6b;
+    h ^= h >> 13;
+    h *= 0xc2b2ae35;
+    h ^= h >> 16;
+    return h;
+}
+
+static const uint32_t
+murmur3_32_8(const uint64_t key) {
+    uint32_t h = FHT_HASH_SEED;
+
+    // 1st 4 bytes
+    uint32_t k = key;
+    k *= 0xcc9e2d51;
+    k = (k << 15) | (k >> 17);
+    k *= 0x1b873593;
+    h ^= k;
+    h = (h << 13) | (h >> 19);
+    h = h * 5 + 0xe6546b64;
+
+    // 2nd 4 bytes
+    k = key >> 32;
+    k *= 0xcc9e2d51;
+    k = (k << 15) | (k >> 17);
+    k *= 0x1b873593;
+    h ^= k;
+    h = (h << 13) | (h >> 19);
+    h = h * 5 + 0xe6546b64;
+
+    h ^= 8;
+    h ^= h >> 16;
+    h *= 0x85ebca6b;
+    h ^= h >> 13;
+    h *= 0xc2b2ae35;
+    h ^= h >> 16;
+    return h;
+}
+
+template<typename K>
+struct HASH_32_4 {
+
+    const uint32_t
+    operator()(const K key) const {
+        return murmur3_32_4((key));
+    }
+};
+
+template<typename K>
+struct HASH_32_8 {
+
+    const uint32_t
+    operator()(const K key) const {
+        return murmur3_32_8((key));
+    }
+};
+
+template<typename K>
+struct HASH_32_STR {
+
+    const uint32_t
+    operator()(K const & key) const {
+        return murmur3_32((const uint8_t *)(key.c_str()), key.length());
+    }
+};
+//////////////////////////////////////////////////////////////////////
+
 
 //////////////////////////////////////////////////////////////////////
 // Undefs
