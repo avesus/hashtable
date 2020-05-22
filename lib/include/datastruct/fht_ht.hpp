@@ -348,43 +348,85 @@ fht_table<K, V, Hasher>::resize() {
     for (uint32_t i = 0; i < _num_chunks; i++) {
         const fht_node<K, V> * const nodes = old_chunks[i].nodes;
         const tag_type_t * const     tags  = old_chunks[i].tags;
+        //        const uint64_t * const       fast_tags = (const uint64_t *
+        //        const)tags;
 
+        uint32_t raw_slots[4][56];
+        uint8_t  raw_idx[4][56], incr[4] = { 0, 0 };
+        ;
+        uint64_t ideals[2] = { 0, 0 };
+        //        for (uint32_t out_j = 0; out_j < (FHT_NODES_PER_CACHE_LINE /
+        //        8);
+        //             out_j++) {
+        //            uint64_t fast_bytes = fast_tags[out_j] &
+        //            0x0101010101010101; uint64_t j;
+        //  while(fast_bytes) {
+        //      __asm__("tzcnt %1, %0" : "=r"((j)) : "rm"((fast_bytes)));
+        //      fast_bytes ^= ((1UL) << j);
+        for (uint32_t j = 0; j < (FHT_NODES_PER_CACHE_LINE); j++) {
+            if (!RESIZE_SKIP(tags[j])) {
 
-        for (uint32_t j = 0; j < FHT_NODES_PER_CACHE_LINE; j++) {
-            FHT_STATS_INCR(resize_iter);
-            if (RESIZE_SKIP(tags[j])) {
-                FHT_STATS_INCR(resize_invalid);
-                continue;
+                const uint32_t raw_slot = this->hash_32(nodes[j].key);
+                const uint32_t start_idx =
+                    GEN_START_IDX(raw_slot) & FHT_CACHE_IDX_MASK;
+                const uint32_t next_bit =
+                    (GET_NTH_BIT(raw_slot, _new_log_incr - 1));
+                if (ideals[next_bit] & ((1UL) << (start_idx))) {
+                    raw_slots[next_bit + 2][incr[next_bit + 2]] = raw_slot;
+                    raw_idx[next_bit + 2][incr[next_bit + 2]++] = j;
+                }
+                else {
+                    ideals[next_bit] |= ((1UL) << (start_idx));
+                    raw_slots[next_bit][incr[next_bit]] = raw_slot;
+                    raw_idx[next_bit][incr[next_bit]++] = j;
+                }
             }
-            FHT_STATS_INCR(resize_valid);
+            //            }
+        }
+        for (uint32_t b = 0; b < 2; b++) {
+            const uint32_t b_max = incr[b];
 
-            const tag_type_t tag = tags[j];
-
-            // annoying that we need to access object. C++ needs a better way to
-            // do this.
-            const uint32_t raw_slot  = this->hash_32(nodes[j].key);
-            const uint32_t start_idx = GEN_START_IDX(raw_slot);
-            
             tag_type_t * const new_tags =
-                new_chunks[i | (GET_NTH_BIT(raw_slot, _new_log_incr - 1)
-                                    ? _num_chunks
-                                    : 0)]
-                    .tags;
+                new_chunks[i | ((b & 0x1) ? _num_chunks : 0)].tags;
             fht_node<K, V> * const new_nodes =
-                new_chunks[i | (GET_NTH_BIT(raw_slot, _new_log_incr - 1)
-                                    ? _num_chunks
-                                    : 0)]
-                    .nodes;
+                new_chunks[i | ((b & 0x1) ? _num_chunks : 0)].nodes;
 
-            for (uint32_t new_j = 0; new_j < FHT_SEARCH_NUMBER; new_j++) {
-                FHT_STATS_INCR(resize_sub_iter);
-                const uint32_t test_idx = GEN_TEST_IDX(start_idx, new_j);
-                if (__builtin_expect(!IS_VALID(new_tags[test_idx]), 1)) {
-                    new_tags[test_idx] = tag;
-                    SET_KEY_VAL(new_nodes[test_idx],
-                                nodes[j].key,
-                                nodes[j].val);
-                    break;
+            for (uint32_t j = 0; j < b_max; j++) {
+                const uint32_t   raw_slot  = raw_slots[b][j];
+                const tag_type_t tag       = GEN_TAG(raw_slot);
+                const uint32_t   start_idx = GEN_START_IDX(raw_slot);
+
+                new_tags[start_idx] = tag | VALID_MASK;
+                SET_KEY_VAL(new_nodes[start_idx],
+                            nodes[raw_idx[b][j]].key,
+                            nodes[raw_idx[b][j]].val);
+
+            }
+        }
+
+        for (uint32_t b = 2; b < 4; b++) {
+            const uint32_t b_max = incr[b];
+
+            tag_type_t * const new_tags =
+                new_chunks[i | ((b & 0x1) ? _num_chunks : 0)].tags;
+            fht_node<K, V> * const new_nodes =
+                new_chunks[i | ((b & 0x1) ? _num_chunks : 0)].nodes;
+
+            for (uint32_t j = 0; j < b_max; j++) {
+                const uint32_t   raw_slot  = raw_slots[b][j];
+                const tag_type_t tag       = GEN_TAG(raw_slot);
+                const uint32_t   start_idx = GEN_START_IDX(raw_slot);
+
+                for (uint32_t new_j = 0; new_j < FHT_SEARCH_NUMBER; new_j++) {
+                    FHT_STATS_INCR(resize_sub_iter);
+                    const uint32_t test_idx = GEN_TEST_IDX(start_idx, new_j);
+                    if (__builtin_expect(!IS_VALID(new_tags[test_idx]), 1)) {
+                        new_tags[test_idx] = tag | VALID_MASK;
+                        SET_KEY_VAL(new_nodes[test_idx],
+                                    nodes[raw_idx[b][j]].key,
+                                    nodes[raw_idx[b][j]].val);
+                        break;
+                    }
                 }
             }
         }
@@ -407,6 +449,7 @@ fht_table<K, V, Hasher>::add(const K new_key, const V new_val) {
     fht_chunk<K, V> * const chunks    = this->chunks;
     const uint32_t          raw_slot  = this->hash_32(new_key);
 
+    const uint32_t   next_bit  = GET_NTH_BIT(raw_slot, _log_incr - 1);
     const tag_type_t tag       = GEN_TAG(raw_slot);
     const uint32_t   start_idx = GEN_START_IDX(raw_slot);
 
@@ -425,7 +468,6 @@ fht_table<K, V, Hasher>::add(const K new_key, const V new_val) {
         FHT_STATS_INCR(add_iter);
         // seeded with start_idx we go through idx function
         const uint32_t test_idx = GEN_TEST_IDX(start_idx, j);
-
         if (__builtin_expect(!IS_VALID(tags[test_idx]), 1)) {
             FHT_STATS_INCR(add_tag_match);
             tags[test_idx] = (tag | VALID_MASK);
@@ -455,6 +497,7 @@ fht_table<K, V, Hasher>::add(const K new_key, const V new_val) {
     fht_node<K, V> * const new_nodes =
         (fht_node<K, V> * const)(new_tags + FHT_NODES_PER_CACHE_LINE);
 
+    const uint32_t new_next_bit = GET_NTH_BIT(raw_slot, _log_incr);
     FHT_STATS_INCR(add_resize_att);
     // after resize add without duplication check
     for (uint32_t j = 0; j < FHT_SEARCH_NUMBER; j++) {
@@ -483,6 +526,7 @@ fht_table<K, V, Hasher>::find(const K key) {
     const fht_chunk<K, V> * const chunks    = this->chunks;
     const uint32_t                raw_slot  = this->hash_32(key);
 
+    const uint32_t   next_bit  = GET_NTH_BIT(raw_slot, _log_incr - 1);
     const tag_type_t tag       = GEN_TAG(raw_slot);
     const uint32_t   start_idx = GEN_START_IDX(raw_slot);
 
@@ -532,6 +576,7 @@ fht_table<K, V, Hasher>::remove(const K key) {
     const fht_chunk<K, V> * const chunks    = this->chunks;
     const uint32_t                raw_slot  = this->hash_32(key);
 
+    const uint32_t   next_bit  = GET_NTH_BIT(raw_slot, _log_incr - 1);
     const tag_type_t tag       = GEN_TAG(raw_slot);
     const uint32_t   start_idx = GEN_START_IDX(raw_slot);
 
