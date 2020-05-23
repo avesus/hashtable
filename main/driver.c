@@ -174,7 +174,7 @@ main(int argc, char ** argv) {
     correct_test();
 #endif
 
-// init random nodes
+    // init random nodes
 
 #ifdef INT_TEST
     test_node_t * test_nodes =
@@ -193,13 +193,17 @@ main(int argc, char ** argv) {
     }
 #else
     std::vector<std::string> test_string_node;
+    std::vector<std::string> test_string_node_val;
     std::vector<std::string> test_string_key;
     for (uint32_t i = 0; i < FHT_TEST_SIZE; i++) {
         std::string new_str = "";
-        for (uint32_t len = 0; len < 2; len++) {
+        std::string new_str_val = "";
+        for (uint32_t len = 0; len < 5; len++) {
             new_str += (char)((rand() % 26) + 65);
+            new_str_val += (char)((rand() % 26) + 65);
         }
         test_string_node.push_back(new_str);
+        test_string_node_val.push_back(new_str_val);
     }
     for (uint32_t i = 0; i < FHT_TEST_SIZE * Q_PER_INS; i++) {
         test_string_key.push_back(test_string_node[rand() % FHT_TEST_SIZE]);
@@ -214,18 +218,20 @@ main(int argc, char ** argv) {
 #endif
         // run perf test
         clock_gettime(CLOCK_MONOTONIC, &start);
-        uint32_t counter = 0;
+        uint32_t    counter = 0;
+        uint32_t    ret     = 0;
+        std::string * str_ret;
         for (uint32_t i = 0; i < FHT_TEST_SIZE; i++) {
 #ifdef INT_TEST
             counter ^= table.add((test_nodes + i)->key, (test_nodes + i)->val);
 #else
-            counter ^= table.add(test_string_node[i], "");
+            counter ^= table.add(test_string_node[i], test_string_node_val[i]);
 #endif
             for (uint32_t j = i * Q_PER_INS; j < (i + 1) * Q_PER_INS; j++) {
 #ifdef INT_TEST
-                counter ^= table.find(test_keys[j]);
+                counter ^= table.find(test_keys[j], &ret);
 #else
-                counter ^= table.find(test_string_key[j]);
+                counter ^= table.find(test_string_key[j], &str_ret);
 #endif
             }
         }
@@ -244,7 +250,7 @@ main(int argc, char ** argv) {
 #ifdef INT_TEST
             table[test_nodes[i].key] = test_nodes[i].val;
 #else
-            table[test_string_node[i]] = "";
+            table[test_string_node[i]] = test_string_node_val[i];
 #endif
             for (uint32_t j = i * Q_PER_INS; j < (i + 1) * Q_PER_INS; j++) {
 #ifdef INT_TEST
@@ -292,6 +298,7 @@ correct_test() {
         (test_nodes + i)->val = i;
     }
 
+    uint32_t ret = 0;
     for (int att = 0; att < 2; att++) {
         for (uint32_t i = 0; i < FHT_TEST_SIZE; i++) {
             PRINT(MED_VERBOSE,
@@ -301,15 +308,17 @@ correct_test() {
                   test_nodes[i].val);
 
             if (taken[test_nodes[i].key] == 0) {
+
                 total_unique += (att == 0);
                 assert(table.remove(test_nodes[i].key) == FHT_NOT_DELETED);
-                assert(table.find(test_nodes[i].key) == FHT_NOT_FOUND);
+                assert(table.find(test_nodes[i].key, &ret) == FHT_NOT_FOUND);
                 assert(table.add((test_nodes + i)->key,
                                  (test_nodes + i)->val) == FHT_ADDED);
-                assert(table.find(test_nodes[i].key) == FHT_FOUND);
+                assert(table.find(test_nodes[i].key, &ret) == FHT_FOUND);
+                assert(ret == test_nodes[i].val);
             }
             else {
-                assert(table.find(test_nodes[i].key) == FHT_FOUND);
+                assert(table.find(test_nodes[i].key, &ret) == FHT_FOUND);
                 assert(table.add((test_nodes + i)->key,
                                  (test_nodes + i)->val) == FHT_NOT_ADDED);
                 assert(table.remove(test_nodes[i].key) == FHT_DELETED);
@@ -324,7 +333,7 @@ correct_test() {
                   i,
                   test_nodes[i].key,
                   test_nodes[i].val);
-            assert(table.find(test_nodes[i].key) == FHT_FOUND);
+            assert(table.find(test_nodes[i].key, &ret) == FHT_FOUND);
             assert(table.add((test_nodes + i)->key, (test_nodes + i)->val) ==
                    FHT_NOT_ADDED);
         }
@@ -338,7 +347,7 @@ correct_test() {
                 assert(table.remove(test_nodes[i].key) == FHT_DELETED);
             }
             else {
-                assert(table.find(test_nodes[i].key) == FHT_NOT_FOUND);
+                assert(table.find(test_nodes[i].key, &ret) == FHT_NOT_FOUND);
             }
             taken[test_nodes[i].key] = 0;
         }
@@ -350,19 +359,24 @@ correct_test() {
                   test_nodes[i].val);
             if (taken[test_nodes[i].key] == 0) {
                 assert(table.remove(test_nodes[i].key) == FHT_NOT_DELETED);
-                assert(table.find(test_nodes[i].key) == FHT_NOT_FOUND);
+                assert(table.find(test_nodes[i].key, &ret) == FHT_NOT_FOUND);
+
                 assert(table.add((test_nodes + i)->key,
                                  (test_nodes + i)->val) == FHT_ADDED);
+                assert(table.find(test_nodes[i].key, &ret) == FHT_FOUND);
+                assert(ret == test_nodes[i].val);
+
             }
             else {
-                assert(table.find(test_nodes[i].key) == FHT_FOUND);
+                assert(table.find(test_nodes[i].key, &ret) == FHT_FOUND);
                 assert(table.add((test_nodes + i)->key,
                                  (test_nodes + i)->val) == FHT_NOT_ADDED);
                 assert(table.remove(test_nodes[i].key) == FHT_DELETED);
                 assert(table.add((test_nodes + i)->key,
                                  (test_nodes + i)->val) == FHT_ADDED);
+
             }
-            taken[test_nodes[i].key] = 1;
+                taken[test_nodes[i].key] = 1;
         }
 
         for (uint32_t i = 0; i < FHT_TEST_SIZE; i++) {
@@ -372,10 +386,10 @@ correct_test() {
                   test_nodes[i].key,
                   test_nodes[i].val);
             if (taken[test_nodes[i].key] == 1) {
-                assert(table.find(test_nodes[i].key) == FHT_FOUND);
+                assert(table.find(test_nodes[i].key, &ret) == FHT_FOUND);
             }
             else {
-                assert(table.find(test_nodes[i].key) == FHT_NOT_FOUND);
+                assert(table.find(test_nodes[i].key, &ret) == FHT_NOT_FOUND);
             }
         }
 
@@ -389,7 +403,7 @@ correct_test() {
                 assert(table.remove(test_nodes[i].key) == FHT_DELETED);
             }
             else {
-                assert(table.find(test_nodes[i].key) == FHT_NOT_FOUND);
+                assert(table.find(test_nodes[i].key, &ret) == FHT_NOT_FOUND);
             }
             taken[test_nodes[i].key] = 0;
         }
@@ -405,14 +419,17 @@ correct_test() {
                 total_unique += (att == 0);
                 assert(table.remove(test_nodes[i + FHT_TEST_SIZE].key) ==
                        FHT_NOT_DELETED);
-                assert(table.find(test_nodes[i + FHT_TEST_SIZE].key) ==
+                assert(table.find(test_nodes[i + FHT_TEST_SIZE].key, &ret) ==
                        FHT_NOT_FOUND);
                 assert(table.add((test_nodes + i + FHT_TEST_SIZE)->key,
                                  (test_nodes + i + FHT_TEST_SIZE)->val) ==
                        FHT_ADDED);
+                assert(table.find(test_nodes[i + FHT_TEST_SIZE].key, &ret) ==
+                       FHT_FOUND);
+                assert(ret == test_nodes[i + FHT_TEST_SIZE].val);
             }
             else {
-                assert(table.find(test_nodes[i + FHT_TEST_SIZE].key) ==
+                assert(table.find(test_nodes[i + FHT_TEST_SIZE].key, &ret) ==
                        FHT_FOUND);
                 assert(table.add((test_nodes + i + FHT_TEST_SIZE)->key,
                                  (test_nodes + i + FHT_TEST_SIZE)->val) ==
@@ -427,7 +444,7 @@ correct_test() {
         }
         for (uint32_t i = 0; i < FHT_TEST_SIZE; i++) {
             if (taken[test_nodes[i + FHT_TEST_SIZE].key - (1 << 25)] == 1) {
-                assert(table.find(test_nodes[i + FHT_TEST_SIZE].key) ==
+                assert(table.find(test_nodes[i + FHT_TEST_SIZE].key, &ret) ==
                        FHT_FOUND);
                 assert(table.remove(test_nodes[i + FHT_TEST_SIZE].key) ==
                        FHT_DELETED);
@@ -435,7 +452,7 @@ correct_test() {
             }
         }
         for (uint32_t i = 0; i < 2 * FHT_TEST_SIZE; i++) {
-            assert(table.find(test_nodes[i].key) == FHT_NOT_FOUND);
+            assert(table.find(test_nodes[i].key, &ret) == FHT_NOT_FOUND);
         }
     }
 }
