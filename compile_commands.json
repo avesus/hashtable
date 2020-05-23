@@ -11,10 +11,10 @@
             "-D_GNU_SOURCE",
             "-I/home/noah/programs/seq_flat_ht/config",
             "-I/home/noah/programs/seq_flat_ht/lib/include/",
-            "src/helpers/arg.c"
+            "driver.c"
         ],
-        "directory": "/home/noah/programs/seq_flat_ht/lib",
-        "file": "src/helpers/arg.c"
+        "directory": "/home/noah/programs/seq_flat_ht/main",
+        "file": "driver.c"
     },
     {
         "arguments": [
@@ -28,9 +28,9 @@
             "-D_GNU_SOURCE",
             "-I/home/noah/programs/seq_flat_ht/config",
             "-I/home/noah/programs/seq_flat_ht/lib/include/",
-            "driver.c"
+            "src/helpers/arg.c"
         ],
-        "directory": "/home/noah/programs/seq_flat_ht/main",
-        "file": "driver.c"
+        "directory": "/home/noah/programs/seq_flat_ht/lib",
+        "file": "src/helpers/arg.c"
     }
 ]

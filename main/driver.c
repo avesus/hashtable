@@ -1,5 +1,6 @@
 #include "driver.h"
-
+#include <vector>
+#define INT_TEST
 #define myfree free
 #define PRINT(V_LEVEL, ...)                                                    \
     {                                                                          \
@@ -173,12 +174,14 @@ main(int argc, char ** argv) {
     correct_test();
 #endif
 
-    // init random nodes
+// init random nodes
+
+#ifdef INT_TEST
     test_node_t * test_nodes =
         (test_node_t *)calloc(FHT_TEST_SIZE, sizeof(test_node_t));
 
     for (uint32_t i = 0; i < FHT_TEST_SIZE; i++) {
-        (test_nodes + i)->key = random();
+        (test_nodes + i)->key = random() % (1 << 25);
         (test_nodes + i)->val = i;
     }
 
@@ -188,33 +191,67 @@ main(int argc, char ** argv) {
     for (uint32_t i = 0; i < FHT_TEST_SIZE * Q_PER_INS; i++) {
         test_keys[i] = test_nodes[random() % FHT_TEST_SIZE].key;
     }
+#else
+    std::vector<std::string> test_string_node;
+    std::vector<std::string> test_string_key;
+    for (uint32_t i = 0; i < FHT_TEST_SIZE; i++) {
+        std::string new_str = "";
+        for (uint32_t len = 0; len < 2; len++) {
+            new_str += (char)((rand() % 26) + 65);
+        }
+        test_string_node.push_back(new_str);
+    }
+    for (uint32_t i = 0; i < FHT_TEST_SIZE * Q_PER_INS; i++) {
+        test_string_key.push_back(test_string_node[rand() % FHT_TEST_SIZE]);
+    }
 
+#endif
     if (which_table == OUR_TABLE) {
-        //        fht_table<uint32_t, std::string> table(1 << init_size);
+#ifdef INT_TEST
         fht_table<uint32_t, uint32_t> table(1 << init_size);
+#else
+        fht_table<std::string, std::string> table(1 << init_size);
+#endif
         // run perf test
-
         clock_gettime(CLOCK_MONOTONIC, &start);
         uint32_t counter = 0;
         for (uint32_t i = 0; i < FHT_TEST_SIZE; i++) {
+#ifdef INT_TEST
             counter ^= table.add((test_nodes + i)->key, (test_nodes + i)->val);
-            // counter ^= table.add((test_nodes + i)->key, "");
+#else
+            counter ^= table.add(test_string_node[i], "");
+#endif
             for (uint32_t j = i * Q_PER_INS; j < (i + 1) * Q_PER_INS; j++) {
+#ifdef INT_TEST
                 counter ^= table.find(test_keys[j]);
+#else
+                counter ^= table.find(test_string_key[j]);
+#endif
             }
         }
         volatile uint32_t sink = counter;
     }
     else {
+#ifdef INT_TEST
         ska::flat_hash_map<uint32_t, uint32_t> table(1 << init_size);
+#else
+        ska::flat_hash_map<std::string, std::string> table(1 << init_size);
+#endif
         // run perf test
         uint32_t counter = 0;
         clock_gettime(CLOCK_MONOTONIC, &start);
         for (uint32_t i = 0; i < FHT_TEST_SIZE; i++) {
+#ifdef INT_TEST
             table[test_nodes[i].key] = test_nodes[i].val;
-            // table[test_nodes[i].key] = "";
+#else
+            table[test_string_node[i]] = "";
+#endif
             for (uint32_t j = i * Q_PER_INS; j < (i + 1) * Q_PER_INS; j++) {
+#ifdef INT_TEST
                 volatile auto res = table.find(test_keys[j]);
+#else
+                volatile auto res = table.find(test_string_key[j]);
+#endif
             }
         }
         volatile uint32_t sink = counter;
@@ -234,8 +271,8 @@ main(int argc, char ** argv) {
     return 0;
 }
 
-// basic correctness check. Should put table through enough cases that if there
-// is a bug it will catch it
+// basic correctness check. Should put table through enough cases that if
+// there is a bug it will catch it
 static void
 correct_test() {
 
@@ -407,8 +444,8 @@ correct_test() {
 static void
 test_spread() {
 
-    // generate primes up to some reasonable value (basically stopping when * 64
-    // would overflow)
+    // generate primes up to some reasonable value (basically stopping when
+    // * 64 would overflow)
     const uint32_t max_prime = 1 << 12;
     uint32_t *     sieve     = (uint32_t *)calloc(max_prime, sizeof(uint32_t));
 

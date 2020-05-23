@@ -6,13 +6,16 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/mman.h>
-#include <type_traits>
 #include <string>
+#include <type_traits>
 
+/* Todos
+1) Optimize resize
+*/
 
 
 //////////////////////////////////////////////////////////////////////
-//Table params
+// Table params
 //#define FHT_STATS
 #ifdef FHT_STATS
 #define FHT_STATS_INCR(X) this->X++
@@ -56,9 +59,6 @@ struct fht_chunk {
 };
 
 //////////////////////////////////////////////////////////////////////
-
-
-
 
 
 //////////////////////////////////////////////////////////////////////
@@ -158,7 +158,7 @@ murmur3_32_8(const uint64_t key) {
 template<typename K>
 struct HASH_32 {
     const uint32_t
-    operator()(K const& key) const {
+    operator()(K const & key) const {
         return murmur3_32((const uint8_t *)(&key), sizeof(K));
     }
 };
@@ -414,9 +414,9 @@ struct DEFAULT_MMAP_ALLOC {
 #undef mymunmap
 
 //////////////////////////////////////////////////////////////////////
-//Helpers for fht_table constructor
+// Helpers for fht_table constructor
 static uint32_t
-ulog2_64(uint64_t n) {
+log_b2(uint64_t n) {
     uint64_t s, t;
     t = (n > 0xffffffff) << 5;
     n >>= t;
@@ -432,7 +432,7 @@ ulog2_64(uint64_t n) {
 }
 
 static uint32_t
-roundup_32(uint32_t v) {
+roundup_next_p2(uint32_t v) {
     v--;
     v |= v >> 1;
     v |= v >> 2;
@@ -444,7 +444,7 @@ roundup_32(uint32_t v) {
 }
 
 //////////////////////////////////////////////////////////////////////
-//Table class
+// Table class
 
 template<typename K,
          typename V,
@@ -468,6 +468,9 @@ class fht_table {
     uint64_t add_tag_match;
     uint64_t add_tag_fail;
     uint64_t add_tag_success;
+
+    uint64_t add_found_possible_idx;
+    uint64_t add_place_possible_idx;
 
     uint64_t add_resize_att;
     uint64_t add_resize_iter;
@@ -498,11 +501,9 @@ class fht_table {
 
     fht_chunk<K, V> * const resize();
 
-    //    template<typename K, typename V>
-    //    enable_if_t<(boost::is_integral<K> || boost::is_pointer<K>)&&(
-    //        boost::is_integral<V> || boost::is_pointer<V>)>::value,
-    //        true > init_mem(size_t size) {}
-
+    template<typename T>
+    using pass_type_t = typename std::
+        conditional<(std::is_arithmetic<T>::value || std::is_pointer<T>::value), const T, T const &>::type;
 
    public:
     fht_table(uint32_t init_size);
@@ -510,9 +511,9 @@ class fht_table {
     ~fht_table();
 
 
-    uint32_t add(K const & new_key, V const & new_val);
-    uint32_t find(K const & key);
-    uint32_t remove(K const & key);
+    uint32_t add(pass_type_t<K> new_key, pass_type_t<V> new_val);
+    uint32_t find(pass_type_t<K> key);
+    uint32_t remove(pass_type_t<K> key);
 };
 
 
@@ -582,10 +583,10 @@ fht_table<K, V, Hasher, Allocator>::fht_table(const uint32_t init_size) {
 #endif
     const uint64_t _init_size =
         init_size > FHT_DEFAULT_INIT_SIZE
-            ? (init_size ? roundup_32(init_size) : FHT_DEFAULT_INIT_SIZE)
+            ? (init_size ? roundup_next_p2(init_size) : FHT_DEFAULT_INIT_SIZE)
             : FHT_DEFAULT_INIT_SIZE;
 
-    const uint32_t _log_init_size = ulog2_64(_init_size);
+    const uint32_t _log_init_size = log_b2(_init_size);
 
     this->chunks =
         this->alloc_mmap.init_mem((_init_size / FHT_NODES_PER_CACHE_LINE));
@@ -680,7 +681,8 @@ fht_table<K, V, Hasher, Allocator>::resize() {
 // Add Key Val
 template<typename K, typename V, typename Hasher, typename Allocator>
 uint32_t
-fht_table<K, V, Hasher, Allocator>::add(K const & new_key, V const & new_val) {
+fht_table<K, V, Hasher, Allocator>::add(pass_type_t<K> new_key,
+                                        pass_type_t<V> new_val) {
     FHT_STATS_INCR(add_att);
     const uint32_t          _log_incr = this->log_incr;
     fht_chunk<K, V> * const chunks    = this->chunks;
@@ -699,6 +701,8 @@ fht_table<K, V, Hasher, Allocator>::add(K const & new_key, V const & new_val) {
     __builtin_prefetch(nodes + (start_idx & FHT_CACHE_IDX_MASK));
     __builtin_prefetch(tags + (start_idx & FHT_CACHE_IDX_MASK));
 
+
+    uint32_t possible_idx = FHT_NODES_PER_CACHE_LINE;
     // check for valid slot of duplicate
     for (uint32_t j = 0; j < FHT_SEARCH_NUMBER; j++) {
         FHT_STATS_INCR(add_iter);
@@ -706,10 +710,18 @@ fht_table<K, V, Hasher, Allocator>::add(K const & new_key, V const & new_val) {
         const uint32_t test_idx = GEN_TEST_IDX(start_idx, j);
 
         if (__builtin_expect(!IS_VALID(tags[test_idx]), 1)) {
-            FHT_STATS_INCR(add_tag_match);
-            tags[test_idx] = (tag | VALID_MASK);
-            SET_KEY_VAL(nodes[test_idx], new_key, new_val);
-            return FHT_ADDED;
+            if (possible_idx != FHT_NODES_PER_CACHE_LINE) {
+                FHT_STATS_INCR(add_place_possible_idx);
+                tags[possible_idx] = (tag | VALID_MASK);
+                SET_KEY_VAL(nodes[possible_idx], new_key, new_val);
+                return FHT_ADDED;
+            }
+            else {
+                FHT_STATS_INCR(add_tag_match);
+                tags[test_idx] = (tag | VALID_MASK);
+                SET_KEY_VAL(nodes[test_idx], new_key, new_val);
+                return FHT_ADDED;
+            }
         }
         else if ((GET_CONTENT(tags[test_idx]) == tag)) {
             if (COMPARE_KEYS(nodes[test_idx].key, new_key)) {
@@ -724,6 +736,18 @@ fht_table<K, V, Hasher, Allocator>::add(K const & new_key, V const & new_val) {
             }
             FHT_STATS_INCR(add_tag_fail);
         }
+        if (possible_idx == FHT_NODES_PER_CACHE_LINE &&
+            IS_DELETED(tags[test_idx])) {
+            FHT_STATS_INCR(add_found_possible_idx);
+            possible_idx = test_idx;
+        }
+    }
+
+    if (possible_idx != FHT_NODES_PER_CACHE_LINE) {
+        FHT_STATS_INCR(add_place_possible_idx);
+        tags[possible_idx] = (tag | VALID_MASK);
+        SET_KEY_VAL(nodes[possible_idx], new_key, new_val);
+        return FHT_ADDED;
     }
 
     // no valid slot found so resize
@@ -756,7 +780,7 @@ fht_table<K, V, Hasher, Allocator>::add(K const & new_key, V const & new_val) {
 // Find
 template<typename K, typename V, typename Hasher, typename Allocator>
 uint32_t
-fht_table<K, V, Hasher, Allocator>::find(K const & key) {
+fht_table<K, V, Hasher, Allocator>::find(pass_type_t<K> key) {
     FHT_STATS_INCR(find_att);
     const uint32_t                _log_incr = this->log_incr;
     const fht_chunk<K, V> * const chunks    = this->chunks;
@@ -805,7 +829,7 @@ fht_table<K, V, Hasher, Allocator>::find(K const & key) {
 // Delete
 template<typename K, typename V, typename Hasher, typename Allocator>
 uint32_t
-fht_table<K, V, Hasher, Allocator>::remove(K const & key) {
+fht_table<K, V, Hasher, Allocator>::remove(pass_type_t<K> key) {
     FHT_STATS_INCR(remove_att);
     const uint32_t                _log_incr = this->log_incr;
     const fht_chunk<K, V> * const chunks    = this->chunks;
@@ -872,6 +896,18 @@ fht_table<K, V, Hasher, Allocator>::stats_summary() {
                 this->u64div(this->add_iter, this->add_att));
         fprintf(stderr, "\tResize Att   : %lu\n", this->add_resize_att);
         fprintf(stderr, "\tResize Iter  : %lu\n", this->add_resize_iter);
+        fprintf(stderr, "\tFound P Idx  : %lu\n", this->add_found_possible_idx);
+        fprintf(stderr,
+                "\t\tFound Rate       : %.3lf\n",
+                this->u64div(this->add_found_possible_idx, this->add_att));
+        fprintf(stderr, "\tPlace P Idx  : %lu\n", this->add_place_possible_idx);
+        fprintf(stderr,
+                "\t\tPlace Found Rate : %.3lf\n",
+                this->u64div(this->add_place_possible_idx,
+                             this->add_found_possible_idx));
+        fprintf(stderr,
+                "\t\tPlace Raw Rate   : %.3lf\n",
+                this->u64div(this->add_place_possible_idx, this->add_att));
         fprintf(stderr, "\tDuplicate    : %lu\n", this->add_duplicate);
         fprintf(stderr,
                 "\t\tDuplicate Rate   : %.3lf\n",
@@ -976,6 +1012,9 @@ fht_table<K, V, Hasher, Allocator>::stats_summary() {
 
 //////////////////////////////////////////////////////////////////////
 // Undefs
+#undef FHT_STATS
+#undef FHT_STATS_INCR
+#undef FHT_STATS_SUMMARY
 #undef FHT_NODES_PER_CACHE_LINE
 #undef FHT_LOG_NODES_PER_CACHE_LINE
 #undef FHT_CACHE_IDX_MASK
