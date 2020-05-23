@@ -190,13 +190,15 @@ main(int argc, char ** argv) {
     }
 
     if (which_table == OUR_TABLE) {
+        //        fht_table<uint32_t, std::string> table(1 << init_size);
         fht_table<uint32_t, uint32_t> table(1 << init_size);
-
         // run perf test
+
         clock_gettime(CLOCK_MONOTONIC, &start);
         uint32_t counter = 0;
         for (uint32_t i = 0; i < FHT_TEST_SIZE; i++) {
             counter ^= table.add((test_nodes + i)->key, (test_nodes + i)->val);
+            // counter ^= table.add((test_nodes + i)->key, "");
             for (uint32_t j = i * Q_PER_INS; j < (i + 1) * Q_PER_INS; j++) {
                 counter ^= table.find(test_keys[j]);
             }
@@ -204,12 +206,13 @@ main(int argc, char ** argv) {
         volatile uint32_t sink = counter;
     }
     else {
-        ska::flat_hash_map<uint64_t, uint64_t> table(1 << init_size);
+        ska::flat_hash_map<uint32_t, uint32_t> table(1 << init_size);
         // run perf test
         uint32_t counter = 0;
         clock_gettime(CLOCK_MONOTONIC, &start);
         for (uint32_t i = 0; i < FHT_TEST_SIZE; i++) {
             table[test_nodes[i].key] = test_nodes[i].val;
+            // table[test_nodes[i].key] = "";
             for (uint32_t j = i * Q_PER_INS; j < (i + 1) * Q_PER_INS; j++) {
                 volatile auto res = table.find(test_keys[j]);
             }

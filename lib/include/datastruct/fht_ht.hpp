@@ -6,37 +6,229 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/mman.h>
+#include <type_traits>
+#include <string>
 
 
-static uint32_t
-ulog2_64(uint64_t n) {
-    uint64_t s, t;
-    t = (n > 0xffffffff) << 5;
-    n >>= t;
-    t = (n > 0xffff) << 4;
-    n >>= t;
-    s = (n > 0xff) << 3;
-    n >>= s, t |= s;
-    s = (n > 0xf) << 2;
-    n >>= s, t |= s;
-    s = (n > 0x3) << 1;
-    n >>= s, t |= s;
-    return (t | (n >> 1));
+
+//////////////////////////////////////////////////////////////////////
+//Table params
+//#define FHT_STATS
+#ifdef FHT_STATS
+#define FHT_STATS_INCR(X) this->X++
+#define FHT_STATS_SUMMARY this->stats_summary()
+#else
+#define FHT_STATS_INCR(X)
+#define FHT_STATS_SUMMARY
+#endif
+
+
+// tunable
+const uint32_t FHT_MAX_MEMORY        = (1 << 30);
+const uint32_t FHT_DEFAULT_INIT_SIZE = PAGE_SIZE;
+const uint32_t FHT_HASH_SEED         = 0;
+const uint32_t FHT_SEARCH_NUMBER     = (L1_CACHE_LINE_SIZE - 16);
+
+// return values
+const uint32_t FHT_NOT_ADDED = 0;
+const uint32_t FHT_ADDED     = 1;
+
+const uint32_t FHT_NOT_FOUND = 0;
+const uint32_t FHT_FOUND     = 1;
+
+const uint32_t FHT_NOT_DELETED = 0;
+const uint32_t FHT_DELETED     = 1;
+
+
+typedef uint8_t tag_type_t;
+
+template<typename K, typename V>
+struct fht_node {
+    K key;
+    V val;
+};
+
+template<typename K, typename V>
+struct fht_chunk {
+    tag_type_t tags[L1_CACHE_LINE_SIZE];
+
+    fht_node<K, V> nodes[L1_CACHE_LINE_SIZE];
+};
+
+//////////////////////////////////////////////////////////////////////
+
+
+
+
+
+//////////////////////////////////////////////////////////////////////
+// Default hash function
+static const uint32_t
+murmur3_32(const uint8_t * key, const uint32_t len) {
+    uint32_t h = FHT_HASH_SEED;
+    if (len > 3) {
+        const uint32_t * key_x4 = (const uint32_t *)key;
+        uint32_t         i      = len >> 2;
+        do {
+
+            uint32_t k = *key_x4++;
+            k *= 0xcc9e2d51;
+            k = (k << 15) | (k >> 17);
+            k *= 0x1b873593;
+            h ^= k;
+            h = (h << 13) | (h >> 19);
+            h = h * 5 + 0xe6546b64;
+        } while (--i);
+        key = (const uint8_t *)key_x4;
+    }
+    if (len & 3) {
+        uint32_t i = len & 3;
+        uint32_t k = 0;
+        key        = &key[i - 1];
+        do {
+            k <<= 8;
+            k |= *key--;
+        } while (--i);
+        k *= 0xcc9e2d51;
+        k = (k << 15) | (k >> 17);
+        k *= 0x1b873593;
+        h ^= k;
+    }
+    h ^= len;
+    h ^= h >> 16;
+    h *= 0x85ebca6b;
+    h ^= h >> 13;
+    h *= 0xc2b2ae35;
+    h ^= h >> 16;
+    return h;
 }
 
-static uint32_t
-roundup_32(uint32_t v) {
-    v--;
-    v |= v >> 1;
-    v |= v >> 2;
-    v |= v >> 4;
-    v |= v >> 8;
-    v |= v >> 16;
-    v++;
-    return v;
+static const uint32_t
+murmur3_32_4(const uint32_t key) {
+    uint32_t h = FHT_HASH_SEED;
+
+    uint32_t k = key;
+    k *= 0xcc9e2d51;
+    k = (k << 15) | (k >> 17);
+    k *= 0x1b873593;
+    h ^= k;
+    h = (h << 13) | (h >> 19);
+    h = h * 5 + 0xe6546b64;
+
+    h ^= 4;
+    h ^= h >> 16;
+    h *= 0x85ebca6b;
+    h ^= h >> 13;
+    h *= 0xc2b2ae35;
+    h ^= h >> 16;
+    return h;
 }
 
+static const uint32_t
+murmur3_32_8(const uint64_t key) {
+    uint32_t h = FHT_HASH_SEED;
 
+    // 1st 4 bytes
+    uint32_t k = key;
+    k *= 0xcc9e2d51;
+    k = (k << 15) | (k >> 17);
+    k *= 0x1b873593;
+    h ^= k;
+    h = (h << 13) | (h >> 19);
+    h = h * 5 + 0xe6546b64;
+
+    // 2nd 4 bytes
+    k = key >> 32;
+    k *= 0xcc9e2d51;
+    k = (k << 15) | (k >> 17);
+    k *= 0x1b873593;
+    h ^= k;
+    h = (h << 13) | (h >> 19);
+    h = h * 5 + 0xe6546b64;
+
+    h ^= 8;
+    h ^= h >> 16;
+    h *= 0x85ebca6b;
+    h ^= h >> 13;
+    h *= 0xc2b2ae35;
+    h ^= h >> 16;
+    return h;
+}
+
+template<typename K>
+struct HASH_32 {
+    const uint32_t
+    operator()(K const& key) const {
+        return murmur3_32((const uint8_t *)(&key), sizeof(K));
+    }
+};
+
+
+template<typename K>
+struct HASH_32_4 {
+    const uint32_t
+    operator()(const K key) const {
+        return murmur3_32_4((key));
+    }
+};
+
+template<typename K>
+struct HASH_32_8 {
+
+    const uint32_t
+    operator()(const K key) const {
+        return murmur3_32_8((key));
+    }
+};
+
+template<typename K>
+struct HASH_32_CPP_STR {
+
+    const uint32_t
+    operator()(K const & key) const {
+        return murmur3_32((const uint8_t *)(key.c_str()), key.length());
+    }
+};
+
+
+template<typename K>
+struct DEFAULT_HASH_32 {
+
+    template<typename _K = K>
+    typename std::enable_if<(std::is_arithmetic<_K>::value && sizeof(_K) <= 4),
+                            const uint32_t>::type
+    operator()(const K key) const {
+        return murmur3_32_4(key);
+    }
+
+    template<typename _K = K>
+    typename std::enable_if<(std::is_arithmetic<_K>::value && sizeof(_K) == 8),
+                            const uint32_t>::type
+    operator()(const K key) const {
+        return murmur3_32_8(key);
+    }
+
+    template<typename _K = K>
+    typename std::enable_if<(std::is_same<_K, std::string>::value),
+                            const uint32_t>::type
+    operator()(K const & key) const {
+        return murmur3_32((const uint8_t *)(key.c_str()), key.length());
+    }
+
+    template<typename _K = K>
+    typename std::enable_if<(!std::is_same<_K, std::string>::value) &&
+                                (!std::is_arithmetic<_K>::value),
+                            const uint32_t>::type
+    operator()(K const & key) const {
+        return murmur3_32((const uint8_t *)(&key), sizeof(K));
+    }
+};
+
+//////////////////////////////////////////////////////////////////////
+
+
+//////////////////////////////////////////////////////////////////////
+// Memory Allocators
 static void *
 myMmap(void *        addr,
        uint64_t      length,
@@ -82,62 +274,187 @@ myMunmap(void * addr, uint64_t length, const char * fname, const int32_t ln) {
 #define mymunmap(X, Y) myMunmap((X), (Y), __FILE__, __LINE__)
 
 
-//#define FHT_STATS
-#ifdef FHT_STATS
-#define FHT_STATS_INCR(X) this->X++
-#define FHT_STATS_SUMMARY this->stats_summary()
-#else
-#define FHT_STATS_INCR(X)
-#define FHT_STATS_SUMMARY
-#endif
-
-
-// tunable
-const uint32_t FHT_DEFAULT_INIT_SIZE = PAGE_SIZE;
-const uint32_t FHT_HASH_SEED         = 0;
-const uint32_t FHT_SEARCH_NUMBER     = (L1_CACHE_LINE_SIZE - 16);
-
-// return values
-const uint32_t FHT_NOT_ADDED = 0;
-const uint32_t FHT_ADDED     = 1;
-
-const uint32_t FHT_NOT_FOUND = 0;
-const uint32_t FHT_FOUND     = 1;
-
-const uint32_t FHT_NOT_DELETED = 0;
-const uint32_t FHT_DELETED     = 1;
-
-typedef uint8_t tag_type_t;
-
+// less syscalls this way
 template<typename K, typename V>
-struct fht_node {
-    K key;
-    V val;
-};
+struct OPTIMIZED_MMAP_ALLOC {
 
-template<typename K, typename V>
-struct fht_chunk {
-    tag_type_t tags[L1_CACHE_LINE_SIZE];
+    size_t start_offset;
+    void * base_address;
+    OPTIMIZED_MMAP_ALLOC() {
+        this->base_address = mymmap_alloc(FHT_MAX_MEMORY);
+        this->start_offset = 0;
+    }
+    ~OPTIMIZED_MMAP_ALLOC() {
+        mymunmap(this->base_address, FHT_MAX_MEMORY);
+    }
 
-    fht_node<K, V> nodes[L1_CACHE_LINE_SIZE];
-};
+    fht_chunk<K, V> * const
+    init_mem(const size_t size) {
+        const size_t old_start_offset = this->start_offset;
+        this->start_offset +=
+            PAGE_SIZE *
+            ((size * sizeof(fht_chunk<K, V>) + PAGE_SIZE - 1) / PAGE_SIZE);
 
-static const uint32_t murmur3_32(const uint8_t * key, const uint32_t len);
-template<typename K>
-struct DEFAULT_HASH_32 {
-
-
-    const uint32_t
-    operator()(const K key) const {
-        return murmur3_32((const uint8_t *)(&key), sizeof(K));
+        return (fht_chunk<K, V> * const)(this->base_address + old_start_offset);
+    }
+    void
+    deinit_mem(fht_chunk<K, V> * const ptr, const size_t size) const {
+        return;
     }
 };
 
-template<typename K, typename V, typename Hasher = DEFAULT_HASH_32<K>>
+
+template<typename K, typename V>
+struct MMAP_ALLOC {
+
+    fht_chunk<K, V> * const
+    init_mem(const size_t size) const {
+        return (fht_chunk<K, V> * const)mymmap_alloc(size *
+                                                     sizeof(fht_chunk<K, V>));
+    }
+    void
+    deinit_mem(fht_chunk<K, V> * const ptr, const size_t size) const {
+        mymunmap(ptr, size * sizeof(fht_chunk<K, V>));
+    }
+};
+
+template<typename K, typename V>
+struct NEW_MMAP_ALLOC {
+    void *
+    operator new(size_t size) {
+        return mymmap_alloc(size);
+    }
+    void *
+    operator new[](size_t size) {
+        return mymmap_alloc(size);
+    }
+
+    void
+    operator delete(void * ptr, const uint32_t size) {
+        mymunmap(ptr, size);
+    }
+
+    void
+    operator delete[](void * ptr, const uint32_t size) {
+        mymunmap(ptr, size);
+    }
+
+    fht_chunk<K, V> * const
+    init_mem(const size_t size) const {
+        return new fht_chunk<K, V>[size];
+    }
+    void
+    deinit_mem(fht_chunk<K, V> * const ptr, const size_t size) const {
+        delete[] ptr;
+    }
+};
+
+
+template<typename K, typename V>
+struct DEFAULT_MMAP_ALLOC {
+    void *
+    operator new(size_t size) {
+        return mymmap_alloc(size);
+    }
+    void *
+    operator new[](size_t size) {
+        return mymmap_alloc(size);
+    }
+
+    void
+    operator delete(void * ptr, const uint32_t size) {
+        mymunmap(ptr, size);
+    }
+
+    void
+    operator delete[](void * ptr, const uint32_t size) {
+        mymunmap(ptr, size);
+    }
+
+    // basically if we need constructor to be called we go to the overloaded new
+    // version. These are slower for simply types that can be initialized with
+    // just memset. For those types our init mem is compiled to just mmap.
+    template<typename _K = K, typename _V = V>
+    typename std::enable_if<
+        (std::is_arithmetic<_K>::value || std::is_pointer<_K>::value) &&
+            (std::is_arithmetic<_V>::value || std::is_pointer<_V>::value),
+        fht_chunk<K, V> * const>::type
+    init_mem(const size_t size) const {
+        return (fht_chunk<K, V> * const)mymmap_alloc(size *
+                                                     sizeof(fht_chunk<K, V>));
+    }
+    template<typename _K = K, typename _V = V>
+    typename std::enable_if<
+        (std::is_arithmetic<_K>::value || std::is_pointer<_K>::value) &&
+            (std::is_arithmetic<_V>::value || std::is_pointer<_V>::value),
+        void>::type
+    deinit_mem(fht_chunk<K, V> * const ptr, const size_t size) const {
+        mymunmap(ptr, size * sizeof(fht_chunk<K, V>));
+    }
+
+    template<typename _K = K, typename _V = V>
+    typename std::enable_if<
+        (!(std::is_arithmetic<_K>::value || std::is_pointer<_K>::value)) ||
+            (!(std::is_arithmetic<_V>::value || std::is_pointer<_V>::value)),
+        fht_chunk<K, V> * const>::type
+    init_mem(const size_t size) const {
+        return new fht_chunk<K, V>[size];
+    }
+    template<typename _K = K, typename _V = V>
+    typename std::enable_if<
+        (!(std::is_arithmetic<_K>::value || std::is_pointer<_K>::value)) ||
+            (!(std::is_arithmetic<_V>::value || std::is_pointer<_V>::value)),
+        void>::type
+    deinit_mem(fht_chunk<K, V> * const ptr, const size_t size) const {
+        delete[] ptr;
+    }
+};
+
+#undef mymmap_alloc
+#undef mymunmap
+
+//////////////////////////////////////////////////////////////////////
+//Helpers for fht_table constructor
+static uint32_t
+ulog2_64(uint64_t n) {
+    uint64_t s, t;
+    t = (n > 0xffffffff) << 5;
+    n >>= t;
+    t = (n > 0xffff) << 4;
+    n >>= t;
+    s = (n > 0xff) << 3;
+    n >>= s, t |= s;
+    s = (n > 0xf) << 2;
+    n >>= s, t |= s;
+    s = (n > 0x3) << 1;
+    n >>= s, t |= s;
+    return (t | (n >> 1));
+}
+
+static uint32_t
+roundup_32(uint32_t v) {
+    v--;
+    v |= v >> 1;
+    v |= v >> 2;
+    v |= v >> 4;
+    v |= v >> 8;
+    v |= v >> 16;
+    v++;
+    return v;
+}
+
+//////////////////////////////////////////////////////////////////////
+//Table class
+
+template<typename K,
+         typename V,
+         typename Hasher    = DEFAULT_HASH_32<K>,
+         typename Allocator = DEFAULT_MMAP_ALLOC<K, V>>
 class fht_table {
     fht_chunk<K, V> * chunks;
     uint32_t          log_incr;
     Hasher            hash_32;
+    Allocator         alloc_mmap;
 
 #ifdef FHT_STATS
     uint64_t add_att;
@@ -181,15 +498,21 @@ class fht_table {
 
     fht_chunk<K, V> * const resize();
 
+    //    template<typename K, typename V>
+    //    enable_if_t<(boost::is_integral<K> || boost::is_pointer<K>)&&(
+    //        boost::is_integral<V> || boost::is_pointer<V>)>::value,
+    //        true > init_mem(size_t size) {}
+
+
    public:
     fht_table(uint32_t init_size);
     fht_table();
     ~fht_table();
 
 
-    uint32_t add(const K new_key, const V new_val);
-    uint32_t find(const K key);
-    uint32_t remove(const K key);
+    uint32_t add(K const & new_key, V const & new_val);
+    uint32_t find(K const & key);
+    uint32_t remove(K const & key);
 };
 
 
@@ -244,16 +567,16 @@ class fht_table {
 //////////////////////////////////////////////////////////////////////
 // Node helper functions
 #define SET_KEY_VAL(node, _key, _val)                                          \
-    (node).key = (_key);                                                       \
-    (node).val = (_val)
+    (node).key = K(_key);                                                      \
+    (node).val = V(_val)
 #define COMPARE_KEYS(key1, key2) ((key1) == (key2))
 //////////////////////////////////////////////////////////////////////
 
 
 //////////////////////////////////////////////////////////////////////
 // Constructor / Destructor
-template<typename K, typename V, typename Hasher>
-fht_table<K, V, Hasher>::fht_table(const uint32_t init_size) {
+template<typename K, typename V, typename Hasher, typename Allocator>
+fht_table<K, V, Hasher, Allocator>::fht_table(const uint32_t init_size) {
 #ifdef FHT_STATS
     memset(this, 0, sizeof(fht_table));
 #endif
@@ -264,73 +587,29 @@ fht_table<K, V, Hasher>::fht_table(const uint32_t init_size) {
 
     const uint32_t _log_init_size = ulog2_64(_init_size);
 
-    //    hash_func hf;
-    //    this->hash_32 = hf.get_hash_32();
+    this->chunks =
+        this->alloc_mmap.init_mem((_init_size / FHT_NODES_PER_CACHE_LINE));
 
-    this->chunks = (fht_chunk<K, V> *)mymmap_alloc(
-        (_init_size / FHT_NODES_PER_CACHE_LINE) * sizeof(fht_chunk<K, V>));
     this->log_incr = _log_init_size;
 }
-template<typename K, typename V, typename Hasher>
-fht_table<K, V, Hasher>::fht_table() : fht_table(FHT_DEFAULT_INIT_SIZE) {}
+template<typename K, typename V, typename Hasher, typename Allocator>
+fht_table<K, V, Hasher, Allocator>::fht_table()
+    : fht_table(FHT_DEFAULT_INIT_SIZE) {}
 
-template<typename K, typename V, typename Hasher>
-fht_table<K, V, Hasher>::~fht_table() {
+template<typename K, typename V, typename Hasher, typename Allocator>
+fht_table<K, V, Hasher, Allocator>::~fht_table() {
     FHT_STATS_SUMMARY;
-    mymunmap(this->chunks,
-             ((1 << (this->log_incr)) / FHT_NODES_PER_CACHE_LINE) *
-                 sizeof(fht_chunk<K, V>));
-}
-//////////////////////////////////////////////////////////////////////
-
-//////////////////////////////////////////////////////////////////////
-// Default hash function
-static const uint32_t
-murmur3_32(const uint8_t * key, const uint32_t len) {
-    uint32_t h = FHT_HASH_SEED;
-    if (len > 3) {
-        const uint32_t * key_x4 = (const uint32_t *)key;
-        uint32_t         i      = len >> 2;
-        do {
-
-            uint32_t k = *key_x4++;
-            k *= 0xcc9e2d51;
-            k = (k << 15) | (k >> 17);
-            k *= 0x1b873593;
-            h ^= k;
-            h = (h << 13) | (h >> 19);
-            h = h * 5 + 0xe6546b64;
-        } while (--i);
-        key = (const uint8_t *)key_x4;
-    }
-    if (len & 3) {
-        uint32_t i = len & 3;
-        uint32_t k = 0;
-        key        = &key[i - 1];
-        do {
-            k <<= 8;
-            k |= *key--;
-        } while (--i);
-        k *= 0xcc9e2d51;
-        k = (k << 15) | (k >> 17);
-        k *= 0x1b873593;
-        h ^= k;
-    }
-    h ^= len;
-    h ^= h >> 16;
-    h *= 0x85ebca6b;
-    h ^= h >> 13;
-    h *= 0xc2b2ae35;
-    h ^= h >> 16;
-    return h;
+    this->alloc_mmap.deinit_mem(
+        this->chunks,
+        ((1 << (this->log_incr)) / FHT_NODES_PER_CACHE_LINE));
 }
 //////////////////////////////////////////////////////////////////////
 
 //////////////////////////////////////////////////////////////////////
 // Resize
-template<typename K, typename V, typename Hasher>
+template<typename K, typename V, typename Hasher, typename Allocator>
 fht_chunk<K, V> * const
-fht_table<K, V, Hasher>::resize() {
+fht_table<K, V, Hasher, Allocator>::resize() {
     FHT_STATS_INCR(resize_att);
     const uint32_t                _new_log_incr = ++(this->log_incr);
     const fht_chunk<K, V> * const old_chunks    = this->chunks;
@@ -338,8 +617,8 @@ fht_table<K, V, Hasher>::resize() {
     const uint32_t _num_chunks =
         (1 << (_new_log_incr - 1)) / FHT_NODES_PER_CACHE_LINE;
 
-    fht_chunk<K, V> * const new_chunks = (fht_chunk<K, V> *)mymmap_alloc(
-        (2 * _num_chunks) * sizeof(fht_chunk<K, V>));
+    fht_chunk<K, V> * const new_chunks =
+        this->alloc_mmap.init_mem(2 * _num_chunks);
 
     // set this while its definetly still in cache
     this->chunks = new_chunks;
@@ -364,7 +643,7 @@ fht_table<K, V, Hasher>::resize() {
             // do this.
             const uint32_t raw_slot  = this->hash_32(nodes[j].key);
             const uint32_t start_idx = GEN_START_IDX(raw_slot);
-            
+
             tag_type_t * const new_tags =
                 new_chunks[i | (GET_NTH_BIT(raw_slot, _new_log_incr - 1)
                                     ? _num_chunks
@@ -390,18 +669,18 @@ fht_table<K, V, Hasher>::resize() {
         }
     }
 
-    mymunmap((void *)old_chunks,
-             ((1 << (_new_log_incr - 1)) / FHT_NODES_PER_CACHE_LINE) *
-                 sizeof(fht_chunk<K, V>));
+    this->alloc_mmap.deinit_mem(
+        (fht_chunk<K, V> * const)old_chunks,
+        ((1 << (_new_log_incr - 1)) / FHT_NODES_PER_CACHE_LINE));
 
     return new_chunks;
 }
 
 //////////////////////////////////////////////////////////////////////
 // Add Key Val
-template<typename K, typename V, typename Hasher>
+template<typename K, typename V, typename Hasher, typename Allocator>
 uint32_t
-fht_table<K, V, Hasher>::add(const K new_key, const V new_val) {
+fht_table<K, V, Hasher, Allocator>::add(K const & new_key, V const & new_val) {
     FHT_STATS_INCR(add_att);
     const uint32_t          _log_incr = this->log_incr;
     fht_chunk<K, V> * const chunks    = this->chunks;
@@ -475,9 +754,9 @@ fht_table<K, V, Hasher>::add(const K new_key, const V new_val) {
 
 //////////////////////////////////////////////////////////////////////
 // Find
-template<typename K, typename V, typename Hasher>
+template<typename K, typename V, typename Hasher, typename Allocator>
 uint32_t
-fht_table<K, V, Hasher>::find(const K key) {
+fht_table<K, V, Hasher, Allocator>::find(K const & key) {
     FHT_STATS_INCR(find_att);
     const uint32_t                _log_incr = this->log_incr;
     const fht_chunk<K, V> * const chunks    = this->chunks;
@@ -524,9 +803,9 @@ fht_table<K, V, Hasher>::find(const K key) {
 
 //////////////////////////////////////////////////////////////////////
 // Delete
-template<typename K, typename V, typename Hasher>
+template<typename K, typename V, typename Hasher, typename Allocator>
 uint32_t
-fht_table<K, V, Hasher>::remove(const K key) {
+fht_table<K, V, Hasher, Allocator>::remove(K const & key) {
     FHT_STATS_INCR(remove_att);
     const uint32_t                _log_incr = this->log_incr;
     const fht_chunk<K, V> * const chunks    = this->chunks;
@@ -575,15 +854,15 @@ fht_table<K, V, Hasher>::remove(const K key) {
 //////////////////////////////////////////////////////////////////////
 // Stats
 #ifdef FHT_STATS
-template<typename K, typename V, typename Hasher>
+template<typename K, typename V, typename Hasher, typename Allocator>
 double
-fht_table<K, V, Hasher>::u64div(uint64_t num, uint64_t den) {
+fht_table<K, V, Hasher, Allocator>::u64div(uint64_t num, uint64_t den) {
     return (double)(((double)num) / ((double)den));
 }
 
-template<typename K, typename V, typename Hasher>
+template<typename K, typename V, typename Hasher, typename Allocator>
 void
-fht_table<K, V, Hasher>::stats_summary() {
+fht_table<K, V, Hasher, Allocator>::stats_summary() {
     if (this->add_att) {
         fprintf(stderr, "\rAdd Stats\n");
         fprintf(stderr, "\tAttempts     : %lu\n", this->add_att);
@@ -693,90 +972,6 @@ fht_table<K, V, Hasher>::stats_summary() {
     }
 }
 #endif
-
-//////////////////////////////////////////////////////////////////////
-// Various Optimized for Size Hash Functions
-//////////////////////////////////////////////////////////////////////
-// Default hash function
-static const uint32_t
-murmur3_32_4(const uint32_t key) {
-    uint32_t h = FHT_HASH_SEED;
-
-    uint32_t k = key;
-    k *= 0xcc9e2d51;
-    k = (k << 15) | (k >> 17);
-    k *= 0x1b873593;
-    h ^= k;
-    h = (h << 13) | (h >> 19);
-    h = h * 5 + 0xe6546b64;
-
-    h ^= 4;
-    h ^= h >> 16;
-    h *= 0x85ebca6b;
-    h ^= h >> 13;
-    h *= 0xc2b2ae35;
-    h ^= h >> 16;
-    return h;
-}
-
-static const uint32_t
-murmur3_32_8(const uint64_t key) {
-    uint32_t h = FHT_HASH_SEED;
-
-    // 1st 4 bytes
-    uint32_t k = key;
-    k *= 0xcc9e2d51;
-    k = (k << 15) | (k >> 17);
-    k *= 0x1b873593;
-    h ^= k;
-    h = (h << 13) | (h >> 19);
-    h = h * 5 + 0xe6546b64;
-
-    // 2nd 4 bytes
-    k = key >> 32;
-    k *= 0xcc9e2d51;
-    k = (k << 15) | (k >> 17);
-    k *= 0x1b873593;
-    h ^= k;
-    h = (h << 13) | (h >> 19);
-    h = h * 5 + 0xe6546b64;
-
-    h ^= 8;
-    h ^= h >> 16;
-    h *= 0x85ebca6b;
-    h ^= h >> 13;
-    h *= 0xc2b2ae35;
-    h ^= h >> 16;
-    return h;
-}
-
-template<typename K>
-struct HASH_32_4 {
-
-    const uint32_t
-    operator()(const K key) const {
-        return murmur3_32_4((key));
-    }
-};
-
-template<typename K>
-struct HASH_32_8 {
-
-    const uint32_t
-    operator()(const K key) const {
-        return murmur3_32_8((key));
-    }
-};
-
-template<typename K>
-struct HASH_32_STR {
-
-    const uint32_t
-    operator()(K const & key) const {
-        return murmur3_32((const uint8_t *)(key.c_str()), key.length());
-    }
-};
-//////////////////////////////////////////////////////////////////////
 
 
 //////////////////////////////////////////////////////////////////////
