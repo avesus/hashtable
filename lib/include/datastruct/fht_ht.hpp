@@ -1091,7 +1091,7 @@ roundup_next_p2(uint32_t v) {
 //////////////////////////////////////////////////////////////////////
 // Undefs
 #undef FHT_PASS_BY_VAL_THRESH
-#under FHT_SEPERATE_THRESH
+#undef FHT_SEPERATE_THRESH
 #undef FHT_NODES_PER_CACHE_LINE
 #undef FHT_LOG_NODES_PER_CACHE_LINE
 #undef FHT_CACHE_IDX_MASK
