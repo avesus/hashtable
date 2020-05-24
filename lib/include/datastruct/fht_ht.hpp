@@ -194,11 +194,6 @@ struct fht_chunk {
         return (tag_type_t * const)(&(this->tags[n]));
     }
 
-    void
-    set_tag_n(const uint32_t n, const tag_type_t new_tag) {
-        this->tags[n] = new_tag;
-    }
-
     //////////////////////////////////////////////////////////////////////
     // <= SEPERATE_THRESH byte value methods
     template<typename _K = K, typename _V = V>
@@ -235,13 +230,6 @@ struct fht_chunk {
                                       V * const>::type
     get_val_n_ptr(const uint32_t n) const {
         return (V * const)(&(this->nodes.vals[n]));
-    }
-
-    template<typename _K = K, typename _V = V>
-    typename std::enable_if<(sizeof(_K) <= SEPERATE_THRESH), void>::type
-    set_key_val(const uint32_t n, key_pass_t new_key, val_pass_t new_val) {
-        this->nodes.keys[n] = new_key;
-        this->nodes.vals[n] = new_val;
     }
 
     template<typename _K = K, typename _V = V>
@@ -296,12 +284,7 @@ struct fht_chunk {
         return (V * const)(&(this->nodes.nodes[n].val));
     }
 
-    template<typename _K = K, typename _V = V>
-    typename std::enable_if<(sizeof(_K) > SEPERATE_THRESH), void>::type
-    set_key_val(const uint32_t n, key_pass_t new_key, val_pass_t new_val) {
-        this->nodes.nodes[n].key = new_key;
-        this->nodes.nodes[n].val = new_val;
-    }
+
     template<typename _K = K, typename _V = V>
     typename std::enable_if<(sizeof(_K) > SEPERATE_THRESH), void>::type
     set_key_val_tag(const uint32_t   n,
@@ -473,12 +456,10 @@ fht_table<K, V, Returner, Hasher, Allocator>::add(key_pass_t new_key,
     const uint32_t          _log_incr = this->log_incr;
     const uint32_t          raw_slot  = this->hash_32(new_key);
     fht_chunk<K, V> * const chunk     = (fht_chunk<K, V> * const)(
-        (this->chunks) +
-        (HASH_TO_IDX(raw_slot, _log_incr)));
+        (this->chunks) + (HASH_TO_IDX(raw_slot, _log_incr)));
 
     const tag_type_t tag       = GEN_TAG(raw_slot);
     const uint32_t   start_idx = GEN_START_IDX(raw_slot);
-
 
     // the prefetch on nodes is particularly important
     __builtin_prefetch(chunk->get_tag_n_ptr(start_idx & FHT_CACHE_IDX_MASK));
@@ -559,11 +540,10 @@ template<typename K,
 const uint32_t
 fht_table<K, V, Returner, Hasher, Allocator>::find(key_pass_t key,
                                                    ret_type_t store_val) {
-    const uint32_t          _log_incr = this->log_incr;
-    const uint32_t          raw_slot  = this->hash_32(key);
-    fht_chunk<K, V> * const chunk     = (fht_chunk<K, V> * const)(
-        (this->chunks) +
-        (HASH_TO_IDX(raw_slot, _log_incr)));
+    const uint32_t                _log_incr = this->log_incr;
+    const uint32_t                raw_slot  = this->hash_32(key);
+    const fht_chunk<K, V> * const chunk     = (const fht_chunk<K, V> * const)(
+        (this->chunks) + (HASH_TO_IDX(raw_slot, _log_incr)));
 
     // by setting valid here we can remove delete check
     const tag_type_t tag       = GEN_TAG(raw_slot) | VALID_MASK;
@@ -583,11 +563,8 @@ fht_table<K, V, Returner, Hasher, Allocator>::find(key_pass_t key,
         }
         else if ((chunk->get_tag_n(test_idx) == tag) &&
                  chunk->compare_key_n(test_idx, key)) {
-            if (store_val) {
-                this->returner.to_ret_type(store_val,
-                                           chunk->get_val_n_ptr(test_idx));
-            }
-
+            this->returner.to_ret_type(store_val,
+                                       chunk->get_val_n_ptr(test_idx));
             return FHT_FOUND;
         }
     }
@@ -607,15 +584,12 @@ fht_table<K, V, Returner, Hasher, Allocator>::remove(key_pass_t key) {
     const uint32_t          _log_incr = this->log_incr;
     const uint32_t          raw_slot  = this->hash_32(key);
     fht_chunk<K, V> * const chunk     = (fht_chunk<K, V> * const)(
-        (this->chunks) +
-        (HASH_TO_IDX(raw_slot, _log_incr)));
+        (this->chunks) + (HASH_TO_IDX(raw_slot, _log_incr)));
 
 
     const tag_type_t tag       = GEN_TAG(raw_slot) | VALID_MASK;
     const uint32_t   start_idx = GEN_START_IDX(raw_slot);
 
-
-    // the prefetch on nodes is particularly important
     __builtin_prefetch(chunk->get_tag_n_ptr(start_idx & FHT_CACHE_IDX_MASK));
     __builtin_prefetch(chunk->get_key_n_ptr(start_idx & FHT_CACHE_IDX_MASK));
 
@@ -655,14 +629,18 @@ struct DEFAULT_RETURNER {
     template<typename _V = V>
     typename std::enable_if<(sizeof(_V) <= PASS_BY_VAL_THRESH), void>::type
     to_ret_type(ret_type_t store_val, V const * val) const {
-        *store_val = *val;
+        if (store_val) {
+            *store_val = *val;
+        }
     }
 
     // this is case where ** is passed (bigger types)
     template<typename _V = V>
     typename std::enable_if<(sizeof(_V) > PASS_BY_VAL_THRESH), void>::type
     to_ret_type(ret_type_t store_val, V * val) const {
-        *store_val = val;
+        if (store_val) {
+            *store_val = val;
+        }
     }
 };
 
@@ -675,7 +653,9 @@ struct REF_RETURNER {
 
     void
     to_ret_type(ret_type_t store_val, V const * val) const {
-        store_val = *val;
+        if (store_val) {
+            store_val = *val;
+        }
     }
 };
 
@@ -689,7 +669,9 @@ struct PTR_RETURNER {
 
     void
     to_ret_type(ret_type_t store_val, V const * val) const {
-        *store_val = *val;
+        if (store_val) {
+            *store_val = *val;
+        }
     }
 };
 
@@ -702,7 +684,9 @@ struct PTR_PTR_RETURNER {
 
     void
     to_ret_type(ret_type_t store_val, V * val) const {
-        *store_val = val;
+        if (store_val) {
+            *store_val = val;
+        }
     }
 };
 
