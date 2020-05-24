@@ -1,6 +1,6 @@
 #include "driver.h"
 #include <vector>
-#define INT_TEST
+//#define INT_TEST
 #define myfree free
 #define PRINT(V_LEVEL, ...)                                                    \
     {                                                                          \
@@ -196,9 +196,9 @@ main(int argc, char ** argv) {
     std::vector<std::string> test_string_node_val;
     std::vector<std::string> test_string_key;
     for (uint32_t i = 0; i < FHT_TEST_SIZE; i++) {
-        std::string new_str = "";
+        std::string new_str     = "";
         std::string new_str_val = "";
-        for (uint32_t len = 0; len < 5; len++) {
+        for (uint32_t len = 0; len < 10; len++) {
             new_str += (char)((rand() % 26) + 65);
             new_str_val += (char)((rand() % 26) + 65);
         }
@@ -218,8 +218,8 @@ main(int argc, char ** argv) {
 #endif
         // run perf test
         clock_gettime(CLOCK_MONOTONIC, &start);
-        uint32_t    counter = 0;
-        uint32_t    ret     = 0;
+        uint32_t      counter = 0;
+        uint32_t      ret     = 0;
         std::string * str_ret;
         for (uint32_t i = 0; i < FHT_TEST_SIZE; i++) {
 #ifdef INT_TEST
@@ -279,8 +279,10 @@ main(int argc, char ** argv) {
 
 // basic correctness check. Should put table through enough cases that if
 // there is a bug it will catch it
+
 static void
 correct_test() {
+
 
     uint8_t * taken        = (uint8_t *)calloc((1 << 25), sizeof(uint32_t));
     uint32_t  total_unique = 0;
@@ -365,7 +367,6 @@ correct_test() {
                                  (test_nodes + i)->val) == FHT_ADDED);
                 assert(table.find(test_nodes[i].key, &ret) == FHT_FOUND);
                 assert(ret == test_nodes[i].val);
-
             }
             else {
                 assert(table.find(test_nodes[i].key, &ret) == FHT_FOUND);
@@ -374,9 +375,8 @@ correct_test() {
                 assert(table.remove(test_nodes[i].key) == FHT_DELETED);
                 assert(table.add((test_nodes + i)->key,
                                  (test_nodes + i)->val) == FHT_ADDED);
-
             }
-                taken[test_nodes[i].key] = 1;
+            taken[test_nodes[i].key] = 1;
         }
 
         for (uint32_t i = 0; i < FHT_TEST_SIZE; i++) {
@@ -719,4 +719,5 @@ test_spread() {
             }
         }
     }
+    
 }
