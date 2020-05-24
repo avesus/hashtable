@@ -749,7 +749,7 @@ murmur3_32(const uint8_t * key, const uint32_t len) {
     return h;
 }
 
-static inline const uint32_t
+static const uint32_t
 murmur3_32_4(const uint32_t key) {
     uint32_t h = FHT_HASH_SEED;
 
@@ -770,7 +770,7 @@ murmur3_32_4(const uint32_t key) {
     return h;
 }
 
-static inline const uint32_t
+static const uint32_t
 murmur3_32_8(const uint64_t key) {
     uint32_t h = FHT_HASH_SEED;
 
