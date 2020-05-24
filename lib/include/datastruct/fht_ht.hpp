@@ -89,10 +89,10 @@ const uint32_t FHT_NOT_DELETED = 0;
 const uint32_t FHT_DELETED     = 1;
 
 // needs to be #define for compile time comparisons
-#define PASS_BY_VAL_THRESH 8
+#define FHT_PASS_BY_VAL_THRESH 8
 
 // for optimized layout of node struct
-#define SEPERATE_THRESH 8
+#define FHT_SEPERATE_THRESH 8
 
 typedef uint8_t tag_type_t;
 
@@ -155,13 +155,13 @@ struct fht_chunk {
 
     template<typename T>
     using pass_type_t =
-        typename std::conditional<(sizeof(T) <= PASS_BY_VAL_THRESH),
+        typename std::conditional<(sizeof(T) <= FHT_PASS_BY_VAL_THRESH),
                                   const T,
                                   T const &>::type;
 
     template<typename _K = K, typename _V = V>
     using local_node_t =
-        typename std::conditional<(sizeof(_K) <= SEPERATE_THRESH),
+        typename std::conditional<(sizeof(_K) <= FHT_SEPERATE_THRESH),
                                   fht_seperate_kv<_K, _V>,
                                   fht_combined_kv<_K, _V>>::type;
 
@@ -195,23 +195,23 @@ struct fht_chunk {
     }
 
     //////////////////////////////////////////////////////////////////////
-    // <= SEPERATE_THRESH byte value methods
+    // <= FHT_SEPERATE_THRESH byte value methods
     template<typename _K = K, typename _V = V>
-    constexpr typename std::enable_if<(sizeof(_K) <= SEPERATE_THRESH),
+    constexpr typename std::enable_if<(sizeof(_K) <= FHT_SEPERATE_THRESH),
                                       key_pass_t>::type
     get_key_n(const uint32_t n) const {
         return this->nodes.keys[n];
     }
 
     template<typename _K = K, typename _V = V>
-    constexpr typename std::enable_if<(sizeof(_K) <= SEPERATE_THRESH),
+    constexpr typename std::enable_if<(sizeof(_K) <= FHT_SEPERATE_THRESH),
                                       const uint32_t>::type
     compare_key_n(const uint32_t n, key_pass_t other_key) const {
         return this->nodes.keys[n] == other_key;
     }
 
     template<typename _K = K, typename _V = V>
-    constexpr typename std::enable_if<(sizeof(_K) <= SEPERATE_THRESH),
+    constexpr typename std::enable_if<(sizeof(_K) <= FHT_SEPERATE_THRESH),
                                       val_pass_t>::type
     get_val_n(const uint32_t n) const {
         return this->nodes.vals[n];
@@ -219,21 +219,21 @@ struct fht_chunk {
 
 
     template<typename _K = K, typename _V = V>
-    constexpr typename std::enable_if<(sizeof(_K) <= SEPERATE_THRESH),
+    constexpr typename std::enable_if<(sizeof(_K) <= FHT_SEPERATE_THRESH),
                                       K * const>::type
     get_key_n_ptr(const uint32_t n) const {
         return (K * const)(&(this->nodes.keys[n]));
     }
 
     template<typename _K = K, typename _V = V>
-    constexpr typename std::enable_if<(sizeof(_K) <= SEPERATE_THRESH),
+    constexpr typename std::enable_if<(sizeof(_K) <= FHT_SEPERATE_THRESH),
                                       V * const>::type
     get_val_n_ptr(const uint32_t n) const {
         return (V * const)(&(this->nodes.vals[n]));
     }
 
     template<typename _K = K, typename _V = V>
-    typename std::enable_if<(sizeof(_K) <= SEPERATE_THRESH), void>::type
+    typename std::enable_if<(sizeof(_K) <= FHT_SEPERATE_THRESH), void>::type
     set_key_val_tag(const uint32_t   n,
                     key_pass_t       new_key,
                     val_pass_t       new_val,
@@ -246,16 +246,16 @@ struct fht_chunk {
 
 
     //////////////////////////////////////////////////////////////////////
-    // Non SEPERATE_THRESH byte value methods
+    // Non FHT_SEPERATE_THRESH byte value methods
     template<typename _K = K, typename _V = V>
-    constexpr typename std::enable_if<(sizeof(_K) > SEPERATE_THRESH),
+    constexpr typename std::enable_if<(sizeof(_K) > FHT_SEPERATE_THRESH),
                                       key_pass_t>::type
     get_key_n(const uint32_t n) const {
         return this->nodes.nodes[n].key;
     }
 
     template<typename _K = K, typename _V = V>
-    constexpr typename std::enable_if<(sizeof(_K) > SEPERATE_THRESH),
+    constexpr typename std::enable_if<(sizeof(_K) > FHT_SEPERATE_THRESH),
                                       const uint32_t>::type
     compare_key_n(const uint32_t n, key_pass_t other_key) const {
         return this->nodes.nodes[n].key == other_key;
@@ -263,7 +263,7 @@ struct fht_chunk {
 
 
     template<typename _K = K, typename _V = V>
-    constexpr typename std::enable_if<(sizeof(_K) > SEPERATE_THRESH),
+    constexpr typename std::enable_if<(sizeof(_K) > FHT_SEPERATE_THRESH),
                                       val_pass_t>::type
     get_val_n(const uint32_t n) const {
         return this->nodes.nodes[n].val;
@@ -272,21 +272,21 @@ struct fht_chunk {
 
     template<typename _K = K, typename _V = V>
     constexpr
-        typename std::enable_if<(sizeof(_K) > SEPERATE_THRESH), K * const>::type
+        typename std::enable_if<(sizeof(_K) > FHT_SEPERATE_THRESH), K * const>::type
         get_key_n_ptr(const uint32_t n) const {
         return (K * const)(&(this->nodes.nodes[n].key));
     }
 
     template<typename _K = K, typename _V = V>
     constexpr
-        typename std::enable_if<(sizeof(_K) > SEPERATE_THRESH), V * const>::type
+        typename std::enable_if<(sizeof(_K) > FHT_SEPERATE_THRESH), V * const>::type
         get_val_n_ptr(const uint32_t n) const {
         return (V * const)(&(this->nodes.nodes[n].val));
     }
 
 
     template<typename _K = K, typename _V = V>
-    typename std::enable_if<(sizeof(_K) > SEPERATE_THRESH), void>::type
+    typename std::enable_if<(sizeof(_K) > FHT_SEPERATE_THRESH), void>::type
     set_key_val_tag(const uint32_t   n,
                     key_pass_t       new_key,
                     val_pass_t       new_val,
@@ -316,7 +316,7 @@ class fht_table {
 
     template<typename T>
     using pass_type_t =
-        typename std::conditional<(sizeof(T) <= PASS_BY_VAL_THRESH),
+        typename std::conditional<(sizeof(T) <= FHT_PASS_BY_VAL_THRESH),
                                   const T,
                                   T const &>::type;
 
@@ -620,14 +620,14 @@ struct DEFAULT_RETURNER {
 
     template<typename _V = V>
     using local_ret_type_t = typename std::
-        conditional<(sizeof(_V) <= PASS_BY_VAL_THRESH), _V *, _V **>::type;
+        conditional<(sizeof(_V) <= FHT_PASS_BY_VAL_THRESH), _V *, _V **>::type;
 
     typedef local_ret_type_t<V> ret_type_t;
 
     // this is case where builtin type is passed (imo ptr counts as thats
     // basically uint64)
     template<typename _V = V>
-    typename std::enable_if<(sizeof(_V) <= PASS_BY_VAL_THRESH), void>::type
+    typename std::enable_if<(sizeof(_V) <= FHT_PASS_BY_VAL_THRESH), void>::type
     to_ret_type(ret_type_t store_val, V const * val) const {
         if (store_val) {
             *store_val = *val;
@@ -636,7 +636,7 @@ struct DEFAULT_RETURNER {
 
     // this is case where ** is passed (bigger types)
     template<typename _V = V>
-    typename std::enable_if<(sizeof(_V) > PASS_BY_VAL_THRESH), void>::type
+    typename std::enable_if<(sizeof(_V) > FHT_PASS_BY_VAL_THRESH), void>::type
     to_ret_type(ret_type_t store_val, V * val) const {
         if (store_val) {
             *store_val = val;
@@ -1090,6 +1090,8 @@ roundup_next_p2(uint32_t v) {
 
 //////////////////////////////////////////////////////////////////////
 // Undefs
+#undef FHT_PASS_BY_VAL_THRESH
+#under FHT_SEPERATE_THRESH
 #undef FHT_NODES_PER_CACHE_LINE
 #undef FHT_LOG_NODES_PER_CACHE_LINE
 #undef FHT_CACHE_IDX_MASK
