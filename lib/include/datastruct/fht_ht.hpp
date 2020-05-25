@@ -7,16 +7,19 @@
 2) Optimize resize
 */
 
-//make sure there are correct
+// if using big pages might want to use a seperate allocator and redefine
+// FHT_DEFAULT_INIT_SIZE
 #ifndef PAGE_SIZE
 
 #define PAGE_SIZE 4096
 
 #endif
 
+// make sure these are correct. Something like $> cat /proc/cpuinfo should give
+// you everything you need
 #ifndef L1_CACHE_LINE_SIZE
 
-#define L1_CACHE_LINE_SIZE 64
+#define L1_CACHE_LINE_SIZE     64
 #define L1_LOG_CACHE_LINE_SIZE 6
 
 #endif
@@ -56,7 +59,7 @@ const uint32_t FHT_DELETED     = 1;
 // these will use the "optimized" find/remove. Basically I find this is
 // important with string keys and thats about all. Seperate types with ,
 struct _fht_empty_t {};
-#define FHT_SPECIAL_TYPES std::string, _fht_empty_t
+#define FHT_SPECIAL_TYPES std::string, _fht_empty_t, uint32_t
 
 
 // tunable but less important
@@ -619,26 +622,27 @@ fht_table<K, V, Returner, Hasher, Allocator>::add(key_pass_t new_key,
                                tag | VALID_MASK);
         return FHT_ADDED;
     }
+    do {
+        // no valid slot found so resize
+        fht_chunk<K, V> * const new_chunk = (fht_chunk<K, V> * const)(
+            this->resize() + HASH_TO_IDX(raw_slot, _log_incr + 1));
 
-    // no valid slot found so resize
-    fht_chunk<K, V> * const new_chunk = (fht_chunk<K, V> * const)(
-        this->resize() + HASH_TO_IDX(raw_slot, _log_incr + 1));
 
+        // after resize add without duplication check
+        for (uint32_t j = 0; j < FHT_SEARCH_NUMBER; j++) {
+            const uint32_t test_idx = GEN_TEST_IDX(start_idx, j);
 
-    // after resize add without duplication check
-    for (uint32_t j = 0; j < FHT_SEARCH_NUMBER; j++) {
-        const uint32_t test_idx = GEN_TEST_IDX(start_idx, j);
-
-        // place but skip duplicate check
-        if (__builtin_expect(!IS_VALID(new_chunk->get_tag_n(test_idx)), 1)) {
-            new_chunk->set_key_val_tag(test_idx,
-                                       new_key,
-                                       new_val,
-                                       tag | VALID_MASK);
-            return FHT_ADDED;
+            // place but skip duplicate check
+            if (__builtin_expect(!IS_VALID(new_chunk->get_tag_n(test_idx)),
+                                 1)) {
+                new_chunk->set_key_val_tag(test_idx,
+                                           new_key,
+                                           new_val,
+                                           tag | VALID_MASK);
+                return FHT_ADDED;
+            }
         }
-    }
-
+    } while (1);
     // probability of this is 1 / (2 ^ FHT_SEARCH_NUMBER)
     assert(0);
 }
