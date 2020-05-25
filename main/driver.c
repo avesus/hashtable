@@ -81,6 +81,26 @@ typedef struct test_node {
     uint32_t val;
 } test_node_t;
 
+struct test_type {
+    uint64_t v1;
+    uint64_t v2;
+    uint64_t v3;
+    uint64_t v4;
+
+    constexpr const uint32_t
+    operator==(test_type const & other) const {
+        return (v1 == other.v1) && (v2 == other.v2);
+    }
+    void
+    operator=(test_type const & other) {
+        (v1 = other.v1) && (v2 = other.v2);
+    }
+    test_type() {}
+    test_type(uint64_t a, uint64_t b) {
+        v1 = a;
+        v2 = b;
+    }
+};
 
 #include <datastruct/fht_ht.hpp>
 
@@ -191,6 +211,19 @@ main(int argc, char ** argv) {
     for (uint32_t i = 0; i < FHT_TEST_SIZE * Q_PER_INS; i++) {
         test_keys[i] = test_nodes[random() % FHT_TEST_SIZE].key;
     }
+#elif defined TEST_TEST
+    std::vector<test_type> test_type_key;
+    std::vector<test_type> test_type_val;
+    std::vector<test_type> test_type_test_key;
+    for (uint32_t i = 0; i < FHT_TEST_SIZE; i++) {
+        test_type k(random(), random());
+        test_type v(random(), random());
+        test_type_key.push_back(k);
+        test_type_val.push_back(v);
+    }
+    for (uint32_t i = 0; i < FHT_TEST_SIZE * Q_PER_INS; i++) {
+        test_type_test_key.push_back(test_type_key[rand() % FHT_TEST_SIZE]);
+    }
 #else
     std::vector<std::string> test_string_node;
     std::vector<std::string> test_string_node_val;
@@ -198,7 +231,7 @@ main(int argc, char ** argv) {
     for (uint32_t i = 0; i < FHT_TEST_SIZE; i++) {
         std::string new_str     = "";
         std::string new_str_val = "";
-        for (uint32_t len = 0; len < 10; len++) {
+        for (uint32_t len = 0; len < 5; len++) {
             new_str += (char)((rand() % 26) + 65);
             new_str_val += (char)((rand() % 26) + 65);
         }
@@ -206,13 +239,15 @@ main(int argc, char ** argv) {
         test_string_node_val.push_back(new_str_val);
     }
     for (uint32_t i = 0; i < FHT_TEST_SIZE * Q_PER_INS; i++) {
-        test_string_key.push_back(test_string_node[rand() % FHT_TEST_SIZE]);
+        test_string_key.push_back(test_string_node[(rand() % (i + (i == 0))) % FHT_TEST_SIZE]);
     }
 
 #endif
     if (which_table == OUR_TABLE) {
 #ifdef INT_TEST
         fht_table<uint32_t, uint32_t> table(1 << init_size);
+#elif defined TEST_TEST
+        fht_table<test_type, test_type> table(1 << init_size);
 #else
         fht_table<std::string, std::string> table(1 << init_size);
 #endif
@@ -220,16 +255,22 @@ main(int argc, char ** argv) {
         clock_gettime(CLOCK_MONOTONIC, &start);
         uint32_t      counter = 0;
         uint32_t      ret     = 0;
+        test_type *   test_ret;
         std::string * str_ret;
         for (uint32_t i = 0; i < FHT_TEST_SIZE; i++) {
 #ifdef INT_TEST
             counter ^= table.add((test_nodes + i)->key, (test_nodes + i)->val);
+#elif defined TEST_TEST
+            counter ^= table.add(test_type_key[i], test_type_val[i]);
+
 #else
             counter ^= table.add(test_string_node[i], test_string_node_val[i]);
 #endif
             for (uint32_t j = i * Q_PER_INS; j < (i + 1) * Q_PER_INS; j++) {
 #ifdef INT_TEST
                 counter ^= table.find(test_keys[j], &ret);
+#elif defined TEST_TEST
+                counter ^= table.find(test_type_test_key[i], &test_ret);
 #else
                 counter ^= table.find(test_string_key[j], &str_ret);
 #endif
@@ -455,6 +496,7 @@ correct_test() {
             assert(table.find(test_nodes[i].key, &ret) == FHT_NOT_FOUND);
         }
     }
+
 }
 
 
@@ -719,5 +761,4 @@ test_spread() {
             }
         }
     }
-    
 }

@@ -1,104 +1,80 @@
 #ifndef _FHT_HT_H_
 #define _FHT_HT_H_
 
+
 /* Todos
-1) Recover perf loss from fht_chunk refactor
+1) Find way to only have 1 find/remove w.o perf loss
 2) Optimize resize
 */
 
 
 //////////////////////////////////////////////////////////////////////
-// Macros
-//////////////////////////////////////////////////////////////////////
-// Constants
-#define FHT_NODES_PER_CACHE_LINE     L1_CACHE_LINE_SIZE
-#define FHT_LOG_NODES_PER_CACHE_LINE L1_LOG_CACHE_LINE_SIZE
-#define FHT_CACHE_IDX_MASK           (FHT_NODES_PER_CACHE_LINE - 1)
-#define FHT_CACHE_ALIGN_MASK         (~(FHT_CACHE_IDX_MASK))
-//////////////////////////////////////////////////////////////////////
-
-//////////////////////////////////////////////////////////////////////
-// Helpers
-// mask of n bits
-#define TO_MASK(n) ((1 << (n)) - 1)
-
-// for extracting a bit
-#define GET_NTH_BIT(X, n) (((X) >> (n)) & 0x1)
-//////////////////////////////////////////////////////////////////////
-
-//////////////////////////////////////////////////////////////////////
-// Tag Fields
-#define VALID_MASK   (0x1)
-#define DELETE_MASK  (0x2)
-#define CONTENT_MASK (~(VALID_MASK | DELETE_MASK))
-
-#define IS_VALID(tag)    ((tag)&VALID_MASK)
-#define SET_VALID(tag)   ((tag) |= VALID_MASK)
-#define SET_UNVALID(tag) ((tag) ^= VALID_MASK)
-
-#define IS_DELETED(tag)    ((tag)&DELETE_MASK)
-#define SET_DELETED(tag)   ((tag) |= DELETE_MASK)
-#define SET_UNDELETED(tag) ((tag) ^= DELETE_MASK)
-
-// skip in resize if either not valid or deleted
-#define RESIZE_SKIP(tag) ((tag & (VALID_MASK | DELETE_MASK)) != VALID_MASK)
-
-// valid bit + delete bit
-#define CONTENT_OFFSET   (1 + 1)
-#define GET_CONTENT(tag) ((tag)&CONTENT_MASK)
-//////////////////////////////////////////////////////////////////////
-// Calculating Tag and Start Idx and chunk from a raw hash
-#define HASH_TO_IDX(hash_val, tbl_log)                                         \
-    ((hash_val & TO_MASK(tbl_log)) / FHT_NODES_PER_CACHE_LINE)
-#define GEN_TAG(hash_val) (((hash_val) << CONTENT_OFFSET))
-#define GEN_START_IDX(hash_val)                                                \
-    ((hash_val) >> (32 - FHT_LOG_NODES_PER_CACHE_LINE))
-//////////////////////////////////////////////////////////////////////
-// For getting test idx from start_idx and j in loop
-#define IDX_MOD(idx)             (3 * (idx))
-#define GEN_TEST_IDX(start, idx) (((start) ^ IDX_MOD(idx)) & FHT_CACHE_IDX_MASK)
-//////////////////////////////////////////////////////////////////////
-
-
-#include <assert.h>
-#include <errno.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <sys/mman.h>
-#include <string>
-#include <type_traits>
-
-
-//////////////////////////////////////////////////////////////////////
 // Table params
-
-// tunable
-const uint32_t FHT_MAX_MEMORY        = (1 << 30);
-const uint32_t FHT_DEFAULT_INIT_SIZE = PAGE_SIZE;
-const uint32_t FHT_HASH_SEED         = 0;
-const uint32_t FHT_SEARCH_NUMBER     = (L1_CACHE_LINE_SIZE - 16);
-
 // return values
 const uint32_t FHT_NOT_ADDED = 0;
 const uint32_t FHT_ADDED     = 1;
 
+//(get value found with store_val argument)
 const uint32_t FHT_NOT_FOUND = 0;
 const uint32_t FHT_FOUND     = 1;
 
 const uint32_t FHT_NOT_DELETED = 0;
 const uint32_t FHT_DELETED     = 1;
 
-// needs to be #define for compile time comparisons
+// tunable
+
+// set these for particular use, set 1 if expectation is success for given
+// function i.e if you expect adds to go through (unique item) set FHT_ADD_EXPEC
+// to 1
+#define FHT_ADD_EXPEC    1
+#define FHT_FIND_EXPEC   1
+#define FHT_REMOVE_EXPEC 1
+
+// from tests this seems best, larger FHT_SEARCH means higher load factor
+#define FHT_SEARCH_NUMBER (L1_CACHE_LINE_SIZE - 16)
+
+// when to change pass by from actual value to reference
 #define FHT_PASS_BY_VAL_THRESH 8
 
-// for optimized layout of node struct
+// for optimized layout of node struct. Keys with size <= get different layout
+// than bigger key vals
 #define FHT_SEPERATE_THRESH 8
 
-typedef uint8_t tag_type_t;
+// these will use the optimized find/remove. Seperate multiple types with ,
+struct _fht_empty_t {};
+#define FHT_SPECIAL_TYPES std::string, _fht_empty_t, uint32_t
+
+
+// tunable but less important
+
+// max memory willing to use (this doesn't really have effect with default
+// allocator)
+const uint32_t FHT_MAX_MEMORY = (1 << 30);
+
+// default init size (since mmap is backend for allocation less than page size
+// has no effect)
+const uint32_t FHT_DEFAULT_INIT_SIZE = PAGE_SIZE;
+
+// literally does not matter unless you care about universal hashing or have
+// some fancy shit in mind
+const uint32_t FHT_HASH_SEED = 0;
+
+
+//////////////////////////////////////////////////////////////////////
+// Macros that are not really tunable
+#include "FHT_HELPER_MACROS.h"
+#include "FHT_SPECIAL_TYPE_MACROS.h"
+
+// necessary includes
+#include <assert.h>
+#include <sys/mman.h>
+#include <string>
+#include <type_traits>
 
 
 //////////////////////////////////////////////////////////////////////
 // forward declaration of default helper struct
+// near their implementations below are some alternatives ive written
 
 // default return expect ptr to val type if val type is a arithmetic or ptr (i.e
 // if val is an int/float or int * / float * pass int * / float * or int ** or
@@ -108,12 +84,17 @@ typedef uint8_t tag_type_t;
 // to ensure unnecissary copying of larger types doesn't happen but smaller
 // types will still be copied cleanly. Returner that sets a different protocol
 // can be implemented (or you can just use REF_RETURNER which has already been
-// defined). If you implement your own make sure ret_type_t is defined!
+// defined).
+// Must Define:
+// ret_type_t
+// to_ret_type(ret_type_t, V * const)
 template<typename V>
 struct DEFAULT_RETURNER;
 
 // depending on type chooses from a few optimized hash functions. Nothing too
 // fancy.
+// Must define:
+// const uint32_t operator()(K) or const uint32_t operator()(K const &)
 template<typename K>
 struct DEFAULT_HASH_32;
 
@@ -124,8 +105,20 @@ struct DEFAULT_HASH_32;
 // allocator be sure that is 1) 0s out the returned memory (this is necessary
 // for correctness) and 2) returns at the very least cache line aligned memory
 // (this is necessary for performance)
+// Must define:
+// fht_chunk<K, V> * const init_mem(const size_t)
+// deinit_mem(fht_chunk<K, V> * const, const size_t size)
+
+// If table type (value or key) requires a constructor (i.e most non primitive
+// classes) must also define:
+// void * new(size_t size)
+// void * new[](size_t size)
+// delete(void * ptr, const uint32_t size)
+// delete[](void * ptr, const uint32_t size)
+
 template<typename K, typename V>
 struct DEFAULT_MMAP_ALLOC;
+//////////////////////////////////////////////////////////////////////
 
 // forward declaration of some basic helpers
 static uint32_t log_b2(uint64_t n);
@@ -139,40 +132,56 @@ struct fht_node {
     K key;
     V val;
 };
+
+// node layout for smaller keys
 template<typename K, typename V>
 struct fht_seperate_kv {
     K keys[L1_CACHE_LINE_SIZE];
     V vals[L1_CACHE_LINE_SIZE];
 };
 
+
+// node layout for larger keys
 template<typename K, typename V>
 struct fht_combined_kv {
     fht_node<K, V> nodes[L1_CACHE_LINE_SIZE];
 };
 
+// chunk containing cache line of tags and a single node (either fht_combined_kv
+// or fht_seperate_kv). Either way each chunk contains bytes per cache line
+// number of key value pairs (on most 64 bit machines this will mean 64 Key
+// value pairs)
 template<typename K, typename V>
 struct fht_chunk {
 
+    // determine best way to pass K/V depending on size. Generally passing
+    // values machine word size is ill advised
     template<typename T>
     using pass_type_t =
         typename std::conditional<(sizeof(T) <= FHT_PASS_BY_VAL_THRESH),
                                   const T,
                                   T const &>::type;
 
+    // determine node type based on K/V
     template<typename _K = K, typename _V = V>
     using local_node_t =
-        typename std::conditional<(sizeof(_K) <= FHT_SEPERATE_THRESH),
+        typename std::conditional<(FHT_NOT_SPECIAL(FHT_SPECIAL_TYPES) &&
+                                   sizeof(_K) <= FHT_SEPERATE_THRESH),
                                   fht_seperate_kv<_K, _V>,
                                   fht_combined_kv<_K, _V>>::type;
 
 
+    // typedefs to fht_table can access these variables
     typedef pass_type_t<K>     key_pass_t;
     typedef pass_type_t<V>     val_pass_t;
     typedef local_node_t<K, V> node_t;
 
-    tag_type_t tags[L1_CACHE_LINE_SIZE];
-    node_t     nodes;
+    // actual content of chunk
+    uint8_t tags[L1_CACHE_LINE_SIZE];
+    node_t  nodes;
 
+
+    // tag helpers
     void
     undelete_tag_n(const uint32_t n) {
         SET_UNDELETED(this->tags[n]);
@@ -184,34 +193,40 @@ struct fht_chunk {
     }
 
     // the following exist for key/val in a far more complicated format
-    constexpr const tag_type_t
+    constexpr const uint8_t
     get_tag_n(const uint32_t n) const {
         return this->tags[n];
     }
 
-    constexpr tag_type_t * const
+    constexpr uint8_t * const
     get_tag_n_ptr(const uint32_t n) const {
-        return (tag_type_t * const)(&(this->tags[n]));
+        return (uint8_t * const)(&(this->tags[n]));
     }
 
+    // overloaded key/value helpers
     //////////////////////////////////////////////////////////////////////
     // <= FHT_SEPERATE_THRESH byte value methods
     template<typename _K = K, typename _V = V>
-    constexpr typename std::enable_if<(sizeof(_K) <= FHT_SEPERATE_THRESH),
-                                      key_pass_t>::type
-    get_key_n(const uint32_t n) const {
+    inline constexpr
+        typename std::enable_if<(FHT_NOT_SPECIAL(FHT_SPECIAL_TYPES) &&
+                                 sizeof(_K) <= FHT_SEPERATE_THRESH),
+                                key_pass_t>::type
+        get_key_n(const uint32_t n) const {
         return this->nodes.keys[n];
     }
 
     template<typename _K = K, typename _V = V>
-    constexpr typename std::enable_if<(sizeof(_K) <= FHT_SEPERATE_THRESH),
-                                      const uint32_t>::type
-    compare_key_n(const uint32_t n, key_pass_t other_key) const {
+    inline constexpr
+        typename std::enable_if<(FHT_NOT_SPECIAL(FHT_SPECIAL_TYPES) &&
+                                 sizeof(_K) <= FHT_SEPERATE_THRESH),
+                                const uint32_t>::type
+        compare_key_n(const uint32_t n, key_pass_t other_key) const {
         return this->nodes.keys[n] == other_key;
     }
 
     template<typename _K = K, typename _V = V>
-    constexpr typename std::enable_if<(sizeof(_K) <= FHT_SEPERATE_THRESH),
+    constexpr typename std::enable_if<(FHT_NOT_SPECIAL(FHT_SPECIAL_TYPES) &&
+                                       sizeof(_K) <= FHT_SEPERATE_THRESH),
                                       val_pass_t>::type
     get_val_n(const uint32_t n) const {
         return this->nodes.vals[n];
@@ -219,25 +234,29 @@ struct fht_chunk {
 
 
     template<typename _K = K, typename _V = V>
-    constexpr typename std::enable_if<(sizeof(_K) <= FHT_SEPERATE_THRESH),
+    constexpr typename std::enable_if<(FHT_NOT_SPECIAL(FHT_SPECIAL_TYPES) &&
+                                       sizeof(_K) <= FHT_SEPERATE_THRESH),
                                       K * const>::type
     get_key_n_ptr(const uint32_t n) const {
         return (K * const)(&(this->nodes.keys[n]));
     }
 
     template<typename _K = K, typename _V = V>
-    constexpr typename std::enable_if<(sizeof(_K) <= FHT_SEPERATE_THRESH),
+    constexpr typename std::enable_if<(FHT_NOT_SPECIAL(FHT_SPECIAL_TYPES) &&
+                                       sizeof(_K) <= FHT_SEPERATE_THRESH),
                                       V * const>::type
     get_val_n_ptr(const uint32_t n) const {
         return (V * const)(&(this->nodes.vals[n]));
     }
 
     template<typename _K = K, typename _V = V>
-    typename std::enable_if<(sizeof(_K) <= FHT_SEPERATE_THRESH), void>::type
-    set_key_val_tag(const uint32_t   n,
-                    key_pass_t       new_key,
-                    val_pass_t       new_val,
-                    const tag_type_t tag) {
+    typename std::enable_if<(FHT_NOT_SPECIAL(FHT_SPECIAL_TYPES) &&
+                             sizeof(_K) <= FHT_SEPERATE_THRESH),
+                            void>::type
+    set_key_val_tag(const uint32_t n,
+                    key_pass_t     new_key,
+                    val_pass_t     new_val,
+                    const uint8_t  tag) {
 
         this->tags[n]       = tag;
         this->nodes.keys[n] = new_key;
@@ -248,14 +267,16 @@ struct fht_chunk {
     //////////////////////////////////////////////////////////////////////
     // Non FHT_SEPERATE_THRESH byte value methods
     template<typename _K = K, typename _V = V>
-    constexpr typename std::enable_if<(sizeof(_K) > FHT_SEPERATE_THRESH),
+    constexpr typename std::enable_if<(FHT_IS_SPECIAL(FHT_SPECIAL_TYPES) ||
+                                       sizeof(_K) > FHT_SEPERATE_THRESH),
                                       key_pass_t>::type
     get_key_n(const uint32_t n) const {
         return this->nodes.nodes[n].key;
     }
 
     template<typename _K = K, typename _V = V>
-    constexpr typename std::enable_if<(sizeof(_K) > FHT_SEPERATE_THRESH),
+    constexpr typename std::enable_if<(FHT_IS_SPECIAL(FHT_SPECIAL_TYPES) ||
+                                       sizeof(_K) > FHT_SEPERATE_THRESH),
                                       const uint32_t>::type
     compare_key_n(const uint32_t n, key_pass_t other_key) const {
         return this->nodes.nodes[n].key == other_key;
@@ -263,7 +284,8 @@ struct fht_chunk {
 
 
     template<typename _K = K, typename _V = V>
-    constexpr typename std::enable_if<(sizeof(_K) > FHT_SEPERATE_THRESH),
+    constexpr typename std::enable_if<(FHT_IS_SPECIAL(FHT_SPECIAL_TYPES) ||
+                                       sizeof(_K) > FHT_SEPERATE_THRESH),
                                       val_pass_t>::type
     get_val_n(const uint32_t n) const {
         return this->nodes.nodes[n].val;
@@ -271,26 +293,30 @@ struct fht_chunk {
 
 
     template<typename _K = K, typename _V = V>
-    constexpr
-        typename std::enable_if<(sizeof(_K) > FHT_SEPERATE_THRESH), K * const>::type
-        get_key_n_ptr(const uint32_t n) const {
+    constexpr typename std::enable_if<(FHT_IS_SPECIAL(FHT_SPECIAL_TYPES) ||
+                                       sizeof(_K) > FHT_SEPERATE_THRESH),
+                                      K * const>::type
+    get_key_n_ptr(const uint32_t n) const {
         return (K * const)(&(this->nodes.nodes[n].key));
     }
 
     template<typename _K = K, typename _V = V>
-    constexpr
-        typename std::enable_if<(sizeof(_K) > FHT_SEPERATE_THRESH), V * const>::type
-        get_val_n_ptr(const uint32_t n) const {
+    constexpr typename std::enable_if<(FHT_IS_SPECIAL(FHT_SPECIAL_TYPES) ||
+                                       sizeof(_K) > FHT_SEPERATE_THRESH),
+                                      V * const>::type
+    get_val_n_ptr(const uint32_t n) const {
         return (V * const)(&(this->nodes.nodes[n].val));
     }
 
 
     template<typename _K = K, typename _V = V>
-    typename std::enable_if<(sizeof(_K) > FHT_SEPERATE_THRESH), void>::type
-    set_key_val_tag(const uint32_t   n,
-                    key_pass_t       new_key,
-                    val_pass_t       new_val,
-                    const tag_type_t tag) {
+    typename std::enable_if<(FHT_IS_SPECIAL(FHT_SPECIAL_TYPES) ||
+                             sizeof(_K) > FHT_SEPERATE_THRESH),
+                            void>::type
+    set_key_val_tag(const uint32_t n,
+                    key_pass_t     new_key,
+                    val_pass_t     new_val,
+                    const uint8_t  tag) {
         this->tags[n]            = tag;
         this->nodes.nodes[n].key = new_key;
         this->nodes.nodes[n].val = new_val;
@@ -298,20 +324,25 @@ struct fht_chunk {
 };
 //////////////////////////////////////////////////////////////////////
 // Table class
-
 template<typename K,
          typename V,
          typename Returner  = DEFAULT_RETURNER<V>,
          typename Hasher    = DEFAULT_HASH_32<K>,
          typename Allocator = DEFAULT_MMAP_ALLOC<K, V>>
 class fht_table {
+
+    // log of table size
+    uint32_t log_incr;
+
+    // chunk array
     fht_chunk<K, V> * chunks;
-    uint32_t          log_incr;
-    Hasher            hash_32;
-    Allocator         alloc_mmap;
-    Returner          returner;
 
+    // helper classes
+    Hasher    hash_32;
+    Allocator alloc_mmap;
+    Returner  returner;
 
+    // double table size and re-place node
     fht_chunk<K, V> * const resize();
 
     template<typename T>
@@ -326,13 +357,51 @@ class fht_table {
 
    public:
     fht_table(uint32_t init_size);
+    // defaults to FHT_DEFAULT_INIT_SIZE (really???)
     fht_table();
     ~fht_table();
 
-
+    // add new key value pair
     const uint32_t add(key_pass_t new_key, val_pass_t new_val);
-    const uint32_t find(key_pass_t key, ret_type_t store_val);
-    const uint32_t remove(key_pass_t key);
+
+    // NOT_SPECIAL type find/remove
+    template<typename _K         = K,
+             typename _V         = V,
+             typename _Returner  = Returner,
+             typename _Hasher    = Hasher,
+             typename _Allocator = Allocator>
+    typename std::enable_if<FHT_NOT_SPECIAL(FHT_SPECIAL_TYPES),
+                            const uint32_t>::type
+    find(key_pass_t key, ret_type_t store_val) const;
+
+
+    template<typename _K         = K,
+             typename _V         = V,
+             typename _Returner  = Returner,
+             typename _Hasher    = Hasher,
+             typename _Allocator = Allocator>
+    typename std::enable_if<FHT_NOT_SPECIAL(FHT_SPECIAL_TYPES),
+                            const uint32_t>::type
+    remove(key_pass_t key) const;
+
+    // special type find/remove
+    template<typename _K         = K,
+             typename _V         = V,
+             typename _Returner  = Returner,
+             typename _Hasher    = Hasher,
+             typename _Allocator = Allocator>
+    typename std::enable_if<FHT_IS_SPECIAL(FHT_SPECIAL_TYPES),
+                            const uint32_t>::type
+    find(key_pass_t key, ret_type_t store_val) const;
+
+    template<typename _K         = K,
+             typename _V         = V,
+             typename _Returner  = Returner,
+             typename _Hasher    = Hasher,
+             typename _Allocator = Allocator>
+    typename std::enable_if<FHT_IS_SPECIAL(FHT_SPECIAL_TYPES),
+                            const uint32_t>::type
+    remove(key_pass_t key) const;
 };
 
 
@@ -349,6 +418,8 @@ template<typename K,
          typename Allocator>
 fht_table<K, V, Returner, Hasher, Allocator>::fht_table(
     const uint32_t init_size) {
+
+    // ensure init_size is above min
     const uint64_t _init_size =
         init_size > FHT_DEFAULT_INIT_SIZE
             ? (init_size ? roundup_next_p2(init_size) : FHT_DEFAULT_INIT_SIZE)
@@ -356,11 +427,15 @@ fht_table<K, V, Returner, Hasher, Allocator>::fht_table(
 
     const uint32_t _log_init_size = log_b2(_init_size);
 
+    // alloc chunks
     this->chunks =
         this->alloc_mmap.init_mem((_init_size / FHT_NODES_PER_CACHE_LINE));
 
+    // set log
     this->log_incr = _log_init_size;
 }
+
+// call above with FHT_DEFAULT_INIT_SIZE
 template<typename K,
          typename V,
          typename Returner,
@@ -369,6 +444,7 @@ template<typename K,
 fht_table<K, V, Returner, Hasher, Allocator>::fht_table()
     : fht_table(FHT_DEFAULT_INIT_SIZE) {}
 
+// dealloc current chunk
 template<typename K,
          typename V,
          typename Returner,
@@ -391,6 +467,7 @@ template<typename K,
 fht_chunk<K, V> * const
 fht_table<K, V, Returner, Hasher, Allocator>::resize() {
 
+    // incr table log
     const uint32_t                _new_log_incr = ++(this->log_incr);
     const fht_chunk<K, V> * const old_chunks    = this->chunks;
 
@@ -398,30 +475,34 @@ fht_table<K, V, Returner, Hasher, Allocator>::resize() {
     const uint32_t _num_chunks =
         (1 << (_new_log_incr - 1)) / FHT_NODES_PER_CACHE_LINE;
 
+    // allocate new chunk array
     fht_chunk<K, V> * const new_chunks =
         this->alloc_mmap.init_mem(2 * _num_chunks);
 
     // set this while its definetly still in cache
     this->chunks = new_chunks;
 
-
+    // iterate through all chunks and re-place nodes
     for (uint32_t i = 0; i < _num_chunks; i++) {
         const fht_chunk<K, V> * const old_chunk = old_chunks + i;
         for (uint32_t j = 0; j < FHT_NODES_PER_CACHE_LINE; j++) {
+
+            // if node is invalid or deleted skip it
             if (RESIZE_SKIP(old_chunk->get_tag_n(j))) {
                 continue;
             }
 
-            const tag_type_t tag = old_chunk->get_tag_n(j);
-
+            const uint8_t  tag       = old_chunk->get_tag_n(j);
             const uint32_t raw_slot  = this->hash_32(old_chunk->get_key_n(j));
             const uint32_t start_idx = GEN_START_IDX(raw_slot);
 
+            // 50 50 of hashing to same slot or slot + .5 * new table size
             fht_chunk<K, V> * const new_chunk =
                 new_chunks +
                 (i |
                  (GET_NTH_BIT(raw_slot, _new_log_incr - 1) ? _num_chunks : 0));
 
+            // place new node w.o duplicate check
             for (uint32_t new_j = 0; new_j < FHT_SEARCH_NUMBER; new_j++) {
                 const uint32_t test_idx = GEN_TEST_IDX(start_idx, new_j);
                 if (__builtin_expect(!IS_VALID(new_chunk->get_tag_n(test_idx)),
@@ -436,6 +517,7 @@ fht_table<K, V, Returner, Hasher, Allocator>::resize() {
         }
     }
 
+    // deallocate old table
     this->alloc_mmap.deinit_mem(
         (fht_chunk<K, V> * const)old_chunks,
         ((1 << (_new_log_incr - 1)) / FHT_NODES_PER_CACHE_LINE));
@@ -453,25 +535,34 @@ template<typename K,
 const uint32_t
 fht_table<K, V, Returner, Hasher, Allocator>::add(key_pass_t new_key,
                                                   val_pass_t new_val) {
+
+    // get all derferncing of this out of the way
     const uint32_t          _log_incr = this->log_incr;
     const uint32_t          raw_slot  = this->hash_32(new_key);
     fht_chunk<K, V> * const chunk     = (fht_chunk<K, V> * const)(
         (this->chunks) + (HASH_TO_IDX(raw_slot, _log_incr)));
 
-    const tag_type_t tag       = GEN_TAG(raw_slot);
-    const uint32_t   start_idx = GEN_START_IDX(raw_slot);
+    // get tag and start_idx from raw_slot
+    const uint8_t  tag       = GEN_TAG(raw_slot);
+    const uint32_t start_idx = GEN_START_IDX(raw_slot);
 
-    // the prefetch on nodes is particularly important
+    // prefetch is nice for performance here
     __builtin_prefetch(chunk->get_tag_n_ptr(start_idx & FHT_CACHE_IDX_MASK));
     __builtin_prefetch(chunk->get_key_n_ptr((start_idx & FHT_CACHE_IDX_MASK)));
 
+    // initialize possible idx (if we can reclaim a deleted slot)
     uint32_t possible_idx = FHT_NODES_PER_CACHE_LINE;
-    // check for valid slot of duplicate
+
+    // check for valid slot or duplicate
     for (uint32_t j = 0; j < FHT_SEARCH_NUMBER; j++) {
         // seeded with start_idx we go through idx function
         const uint32_t test_idx = GEN_TEST_IDX(start_idx, j);
 
-        if (__builtin_expect(!IS_VALID(chunk->get_tag_n(test_idx)), 1)) {
+        // if empty slot found
+        if (__builtin_expect(!IS_VALID(chunk->get_tag_n(test_idx)),
+                             FHT_ADD_EXPEC)) {
+
+            // if we have possible idx place there
             if (possible_idx != FHT_NODES_PER_CACHE_LINE) {
                 chunk->set_key_val_tag(possible_idx,
                                        new_key,
@@ -479,6 +570,7 @@ fht_table<K, V, Returner, Hasher, Allocator>::add(key_pass_t new_key,
                                        tag | VALID_MASK);
                 return FHT_ADDED;
             }
+            // otherwise place in empty slot
             else {
                 chunk->set_key_val_tag(test_idx,
                                        new_key,
@@ -487,6 +579,8 @@ fht_table<K, V, Returner, Hasher, Allocator>::add(key_pass_t new_key,
                 return FHT_ADDED;
             }
         }
+
+        // if tags match then check keys to test for duplicates
         else if ((GET_CONTENT(chunk->get_tag_n(test_idx)) == tag) &&
                  (chunk->compare_key_n(test_idx, new_key))) {
             if (IS_DELETED(chunk->get_tag_n(test_idx))) {
@@ -496,12 +590,14 @@ fht_table<K, V, Returner, Hasher, Allocator>::add(key_pass_t new_key,
             return FHT_NOT_ADDED;
         }
 
+        // get first possible idx available
         if (possible_idx == FHT_NODES_PER_CACHE_LINE &&
             IS_DELETED(chunk->get_tag_n(test_idx))) {
             possible_idx = test_idx;
         }
     }
 
+    // if we couldn't find a slot first check possible idx
     if (possible_idx != FHT_NODES_PER_CACHE_LINE) {
         chunk->set_key_val_tag(possible_idx,
                                new_key,
@@ -518,6 +614,8 @@ fht_table<K, V, Returner, Hasher, Allocator>::add(key_pass_t new_key,
     // after resize add without duplication check
     for (uint32_t j = 0; j < FHT_SEARCH_NUMBER; j++) {
         const uint32_t test_idx = GEN_TEST_IDX(start_idx, j);
+
+        // place but skip duplicate check
         if (__builtin_expect(!IS_VALID(new_chunk->get_tag_n(test_idx)), 1)) {
             new_chunk->set_key_val_tag(test_idx,
                                        new_key,
@@ -537,20 +635,27 @@ template<typename K,
          typename Returner,
          typename Hasher,
          typename Allocator>
-const uint32_t
+template<typename _K,
+         typename _V,
+         typename _Returner,
+         typename _Hasher,
+         typename _Allocator>
+typename std::enable_if<FHT_NOT_SPECIAL(FHT_SPECIAL_TYPES),
+                        const uint32_t>::type
 fht_table<K, V, Returner, Hasher, Allocator>::find(key_pass_t key,
-                                                   ret_type_t store_val) {
+                                                   ret_type_t store_val) const {
+
+    // same deal with add
     const uint32_t                _log_incr = this->log_incr;
     const uint32_t                raw_slot  = this->hash_32(key);
     const fht_chunk<K, V> * const chunk     = (const fht_chunk<K, V> * const)(
         (this->chunks) + (HASH_TO_IDX(raw_slot, _log_incr)));
 
     // by setting valid here we can remove delete check
-    const tag_type_t tag       = GEN_TAG(raw_slot) | VALID_MASK;
-    const uint32_t   start_idx = GEN_START_IDX(raw_slot);
+    const uint8_t  tag       = GEN_TAG(raw_slot) | VALID_MASK;
+    const uint32_t start_idx = GEN_START_IDX(raw_slot);
 
-
-    // the prefetch on nodes is particularly important
+    // prefetch is good for perf
     __builtin_prefetch(chunk->get_tag_n_ptr(start_idx & FHT_CACHE_IDX_MASK));
     __builtin_prefetch(chunk->get_key_n_ptr(start_idx & FHT_CACHE_IDX_MASK));
 
@@ -558,19 +663,25 @@ fht_table<K, V, Returner, Hasher, Allocator>::find(key_pass_t key,
     for (uint32_t j = 0; j < FHT_SEARCH_NUMBER; j++) {
         // seeded with start_idx we go through idx function
         const uint32_t test_idx = GEN_TEST_IDX(start_idx, j);
-        if (__builtin_expect(!IS_VALID(chunk->get_tag_n(test_idx)), 0)) {
+
+        // if we find invalid slot item is not in table
+        if (__builtin_expect(!IS_VALID(chunk->get_tag_n(test_idx)),
+                             (!FHT_FIND_EXPEC))) {
             return FHT_NOT_FOUND;
         }
+
+        // if tag and key match store val in store_val variable provided by user
         else if ((chunk->get_tag_n(test_idx) == tag) &&
                  chunk->compare_key_n(test_idx, key)) {
             this->returner.to_ret_type(store_val,
                                        chunk->get_val_n_ptr(test_idx));
+
             return FHT_FOUND;
         }
     }
     return FHT_NOT_FOUND;
 }
-//////////////////////////////////////////////////////////////////////
+
 
 //////////////////////////////////////////////////////////////////////
 // Delete
@@ -579,16 +690,25 @@ template<typename K,
          typename Returner,
          typename Hasher,
          typename Allocator>
-const uint32_t
-fht_table<K, V, Returner, Hasher, Allocator>::remove(key_pass_t key) {
+template<typename _K,
+         typename _V,
+         typename _Returner,
+         typename _Hasher,
+         typename _Allocator>
+typename std::enable_if<FHT_NOT_SPECIAL(FHT_SPECIAL_TYPES),
+                        const uint32_t>::type
+fht_table<K, V, Returner, Hasher, Allocator>::remove(key_pass_t key) const {
+
+    // basically exact same as find but instead of storing the val just set tag
+    // to deleted
+
     const uint32_t          _log_incr = this->log_incr;
     const uint32_t          raw_slot  = this->hash_32(key);
     fht_chunk<K, V> * const chunk     = (fht_chunk<K, V> * const)(
         (this->chunks) + (HASH_TO_IDX(raw_slot, _log_incr)));
 
-
-    const tag_type_t tag       = GEN_TAG(raw_slot) | VALID_MASK;
-    const uint32_t   start_idx = GEN_START_IDX(raw_slot);
+    const uint8_t  tag       = GEN_TAG(raw_slot) | VALID_MASK;
+    const uint32_t start_idx = GEN_START_IDX(raw_slot);
 
     __builtin_prefetch(chunk->get_tag_n_ptr(start_idx & FHT_CACHE_IDX_MASK));
     __builtin_prefetch(chunk->get_key_n_ptr(start_idx & FHT_CACHE_IDX_MASK));
@@ -598,7 +718,8 @@ fht_table<K, V, Returner, Hasher, Allocator>::remove(key_pass_t key) {
     for (uint32_t j = 0; j < FHT_SEARCH_NUMBER; j++) {
         // seeded with start_idx we go through idx function
         const uint32_t test_idx = GEN_TEST_IDX(start_idx, j);
-        if (__builtin_expect(!IS_VALID(chunk->get_tag_n(test_idx)), 0)) {
+        if (__builtin_expect(!IS_VALID(chunk->get_tag_n(test_idx)),
+                             (!FHT_REMOVE_EXPEC))) {
             return FHT_NOT_DELETED;
         }
         else if ((chunk->get_tag_n(test_idx) == tag) &&
@@ -607,20 +728,135 @@ fht_table<K, V, Returner, Hasher, Allocator>::remove(key_pass_t key) {
             return FHT_DELETED;
         }
     }
+    return FHT_NOT_DELETED;
+}
+
+//////////////////////////////////////////////////////////////////////
+// Optimized for larger sizes?
+
+// find optimized for larger sizes?
+template<typename K,
+         typename V,
+         typename Returner,
+         typename Hasher,
+         typename Allocator>
+template<typename _K,
+         typename _V,
+         typename _Returner,
+         typename _Hasher,
+         typename _Allocator>
+typename std::enable_if<FHT_IS_SPECIAL(FHT_SPECIAL_TYPES), const uint32_t>::type
+fht_table<K, V, Returner, Hasher, Allocator>::find(key_pass_t key,
+                                                   ret_type_t store_val) const {
+
+    // seperate version of find
+    const uint32_t _log_incr = this->log_incr;
+    const uint32_t raw_slot  = this->hash_32(key);
+
+    // instead of doing everything through calls to just do directly. My
+    // compiler at least does a bad job of optimizing out many of the reference
+    // passes
+    const uint8_t * const tags = (const uint8_t * const)(
+        (this->chunks) +
+        ((raw_slot & (TO_MASK(_log_incr) & FHT_CACHE_ALIGN_MASK)) /
+         FHT_NODES_PER_CACHE_LINE));
+
+
+
+    // by setting valid here we can remove delete check
+    const uint8_t  tag       = GEN_TAG(raw_slot) | VALID_MASK;
+    const uint32_t start_idx = GEN_START_IDX(raw_slot);
+
+    // this is the key to seperate find. Basically instead of passing reference
+    // to string to all of the chunk helper functions we can gurantee inline and
+    // use direct values
+    const fht_node<K, V> * const nodes =
+        (const fht_node<K, V> * const)(tags + FHT_NODES_PER_CACHE_LINE);
+
+    __builtin_prefetch(tags + (start_idx & FHT_CACHE_IDX_MASK));
+    __builtin_prefetch(nodes + (start_idx & FHT_CACHE_IDX_MASK));
+
+
+    // check for valid slot of duplicate. Same logic as other find just doing
+    // direct calls instead of via helper functions
+    for (uint32_t j = 0; j < FHT_SEARCH_NUMBER; j++) {
+        // seeded with start_idx we go through idx function
+        const uint32_t test_idx = GEN_TEST_IDX(start_idx, j);
+        if (__builtin_expect(!IS_VALID(tags[test_idx]), (!FHT_FIND_EXPEC))) {
+            return FHT_NOT_FOUND;
+        }
+        else if ((tags[test_idx] == tag) && (nodes[test_idx].key == key)) {
+            this->returner.to_ret_type(store_val,
+                                       (V * const)(&(nodes[test_idx].val)));
+            return FHT_FOUND;
+        }
+    }
     return FHT_NOT_FOUND;
 }
 
+//////////////////////////////////////////////////////////////////////
+// remove optimized for larger sizes?
+template<typename K,
+         typename V,
+         typename Returner,
+         typename Hasher,
+         typename Allocator>
+template<typename _K,
+         typename _V,
+         typename _Returner,
+         typename _Hasher,
+         typename _Allocator>
+typename std::enable_if<FHT_IS_SPECIAL(FHT_SPECIAL_TYPES), const uint32_t>::type
+fht_table<K, V, Returner, Hasher, Allocator>::remove(key_pass_t key) const {
+
+    // same logic as the find function above
+    const uint32_t _log_incr = this->log_incr;
+    const uint32_t raw_slot  = this->hash_32(key);
+
+    uint8_t * const tags = (uint8_t * const)(
+        (this->chunks) +
+        ((raw_slot & (TO_MASK(_log_incr) & FHT_CACHE_ALIGN_MASK)) /
+         FHT_NODES_PER_CACHE_LINE));
+
+
+    const uint8_t  tag       = GEN_TAG(raw_slot) | VALID_MASK;
+    const uint32_t start_idx = GEN_START_IDX(raw_slot);
+
+    const fht_node<K, V> * const nodes =
+        (const fht_node<K, V> * const)(tags + FHT_NODES_PER_CACHE_LINE);
+
+    __builtin_prefetch(tags + (start_idx & FHT_CACHE_IDX_MASK));
+    __builtin_prefetch(nodes + (start_idx & FHT_CACHE_IDX_MASK));
+
+    // check for valid slot of duplicate
+    for (uint32_t j = 0; j < FHT_SEARCH_NUMBER; j++) {
+        // seeded with start_idx we go through idx function
+        const uint32_t test_idx = GEN_TEST_IDX(start_idx, j);
+        if (__builtin_expect(!IS_VALID(tags[test_idx]), (!FHT_REMOVE_EXPEC))) {
+
+            return FHT_NOT_DELETED;
+        }
+        else if ((tags[test_idx] == tag) && (nodes[test_idx].key == key)) {
+            SET_UNDELETED(tags[test_idx]);
+            return FHT_DELETED;
+        }
+    }
+    return FHT_NOT_DELETED;
+}
+//////////////////////////////////////////////////////////////////////
 
 //////////////////////////////////////////////////////////////////////
 // Default classes
 
-
+//better comments above
 template<typename V>
 struct DEFAULT_RETURNER {
 
     template<typename _V = V>
-    using local_ret_type_t = typename std::
-        conditional<(sizeof(_V) <= FHT_PASS_BY_VAL_THRESH), _V *, _V **>::type;
+    using local_ret_type_t =
+        typename std::conditional<(sizeof(_V) <= FHT_PASS_BY_VAL_THRESH),
+                                  _V * const,
+                                  _V ** const>::type;
 
     typedef local_ret_type_t<V> ret_type_t;
 
@@ -628,7 +864,7 @@ struct DEFAULT_RETURNER {
     // basically uint64)
     template<typename _V = V>
     typename std::enable_if<(sizeof(_V) <= FHT_PASS_BY_VAL_THRESH), void>::type
-    to_ret_type(ret_type_t store_val, V const * val) const {
+    to_ret_type(ret_type_t store_val, V * const val) const {
         if (store_val) {
             *store_val = *val;
         }
@@ -637,7 +873,7 @@ struct DEFAULT_RETURNER {
     // this is case where ** is passed (bigger types)
     template<typename _V = V>
     typename std::enable_if<(sizeof(_V) > FHT_PASS_BY_VAL_THRESH), void>::type
-    to_ret_type(ret_type_t store_val, V * val) const {
+    to_ret_type(ret_type_t store_val, V * const val) const {
         if (store_val) {
             *store_val = val;
         }
@@ -1090,32 +1326,8 @@ roundup_next_p2(uint32_t v) {
 
 //////////////////////////////////////////////////////////////////////
 // Undefs
-#undef FHT_PASS_BY_VAL_THRESH
-#undef FHT_SEPERATE_THRESH
-#undef FHT_NODES_PER_CACHE_LINE
-#undef FHT_LOG_NODES_PER_CACHE_LINE
-#undef FHT_CACHE_IDX_MASK
-#undef FHT_CACHE_ALIGN_MASK
-#undef TO_MASK
-#undef GET_NTH_BIT
-#undef VALID_MASK
-#undef DELETE_MASK
-#undef CONTENT_MASK
-#undef IS_VALID
-#undef SET_VALID
-#undef SET_UNVALID
-#undef IS_DELETED
-#undef SET_DELETED
-#undef SET_UNDELETED
-#undef RESIZE_SKIP
-#undef CONTENT_OFFSE
-#undef GET_CONTENT
-#undef GEN_TAG
-#undef GEN_START_IDX
-#undef IDX_MOD
-#undef GEN_TEST_IDX
-#undef SET_KEY_VAL
-#undef COMPARE_KEYS
+#include "UNDEF_FHT_HELPER_MACROS.h"
+#include "UNDEF_FHT_SPECIAL_TYPE_MACROS.h"
 //////////////////////////////////////////////////////////////////////
 
 #endif
