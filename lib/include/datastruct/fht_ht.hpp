@@ -7,6 +7,19 @@
 2) Optimize resize
 */
 
+//make sure there are correct
+#ifndef PAGE_SIZE
+
+#define PAGE_SIZE 4096
+
+#endif
+
+#ifndef L1_CACHE_LINE_SIZE
+
+#define L1_CACHE_LINE_SIZE 64
+#define L1_LOG_CACHE_LINE_SIZE 6
+
+#endif
 
 //////////////////////////////////////////////////////////////////////
 // Table params
@@ -40,9 +53,10 @@ const uint32_t FHT_DELETED     = 1;
 // than bigger key vals
 #define FHT_SEPERATE_THRESH 8
 
-// these will use the optimized find/remove. Seperate multiple types with ,
+// these will use the "optimized" find/remove. Basically I find this is
+// important with string keys and thats about all. Seperate types with ,
 struct _fht_empty_t {};
-#define FHT_SPECIAL_TYPES std::string, _fht_empty_t, uint32_t
+#define FHT_SPECIAL_TYPES std::string, _fht_empty_t
 
 
 // tunable but less important
@@ -762,7 +776,6 @@ fht_table<K, V, Returner, Hasher, Allocator>::find(key_pass_t key,
          FHT_NODES_PER_CACHE_LINE));
 
 
-
     // by setting valid here we can remove delete check
     const uint8_t  tag       = GEN_TAG(raw_slot) | VALID_MASK;
     const uint32_t start_idx = GEN_START_IDX(raw_slot);
@@ -848,7 +861,7 @@ fht_table<K, V, Returner, Hasher, Allocator>::remove(key_pass_t key) const {
 //////////////////////////////////////////////////////////////////////
 // Default classes
 
-//better comments above
+// better comments above
 template<typename V>
 struct DEFAULT_RETURNER {
 
