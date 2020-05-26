@@ -1,6 +1,6 @@
 #include "driver.h"
 #include <vector>
-#define INT_TEST
+#define STR_TEST
 #define myfree free
 #define PRINT(V_LEVEL, ...)                                                    \
     {                                                                          \
@@ -231,7 +231,7 @@ main(int argc, char ** argv) {
     for (uint32_t i = 0; i < FHT_TEST_SIZE; i++) {
         std::string new_str     = "";
         std::string new_str_val = "";
-        for (uint32_t len = 0; len < 5; len++) {
+        for (uint32_t len = 0; len < 50; len++) {
             new_str += (char)((rand() % 26) + 65);
             new_str_val += (char)((rand() % 26) + 65);
         }
@@ -239,13 +239,17 @@ main(int argc, char ** argv) {
         test_string_node_val.push_back(new_str_val);
     }
     for (uint32_t i = 0; i < FHT_TEST_SIZE * Q_PER_INS; i++) {
-        test_string_key.push_back(test_string_node[(rand() % (i + (i == 0))) % FHT_TEST_SIZE]);
+        test_string_key.push_back(
+            test_string_node[(rand() % (i + (i == 0))) % FHT_TEST_SIZE]);
+        //        test_string_key.push_back(test_string_node[(rand() %
+        //        FHT_TEST_SIZE)]);
     }
 
 #endif
     if (which_table == OUR_TABLE) {
 #ifdef INT_TEST
-        fht_table<uint32_t, uint32_t> table(1 << init_size);
+        fht_table<uint32_t, std::string> table(1 << init_size);
+        // fht_table<uint32_t, uint32_t> table(1 << init_size);
 #elif defined TEST_TEST
         fht_table<test_type, test_type> table(1 << init_size);
 #else
@@ -259,7 +263,11 @@ main(int argc, char ** argv) {
         std::string * str_ret;
         for (uint32_t i = 0; i < FHT_TEST_SIZE; i++) {
 #ifdef INT_TEST
-            counter ^= table.add((test_nodes + i)->key, (test_nodes + i)->key);
+            counter ^= table.add(
+                (test_nodes + i)->key,
+                "This is a pretty long string all other things being equal");
+            // counter ^= table.add((test_nodes + i)->key, (test_nodes +
+            // i)->val);
 #elif defined TEST_TEST
             counter ^= table.add(test_type_key[i], test_type_val[i]);
 
@@ -268,7 +276,8 @@ main(int argc, char ** argv) {
 #endif
             for (uint32_t j = i * Q_PER_INS; j < (i + 1) * Q_PER_INS; j++) {
 #ifdef INT_TEST
-                counter ^= table.find(test_keys[j], &ret);
+                //  counter ^= table.find(test_keys[j], &ret);
+                counter ^= table.find(test_keys[j], &str_ret);
 #elif defined TEST_TEST
                 counter ^= table.find(test_type_test_key[i], &test_ret);
 #else
@@ -280,6 +289,7 @@ main(int argc, char ** argv) {
     }
     else {
 #ifdef INT_TEST
+        //   ska::flat_hash_map<uint32_t, std::string> table(1 << init_size);
         ska::flat_hash_map<uint32_t, uint32_t> table(1 << init_size);
 #else
         ska::flat_hash_map<std::string, std::string> table(1 << init_size);
@@ -289,7 +299,9 @@ main(int argc, char ** argv) {
         clock_gettime(CLOCK_MONOTONIC, &start);
         for (uint32_t i = 0; i < FHT_TEST_SIZE; i++) {
 #ifdef INT_TEST
-            table[test_nodes[i].key] = test_nodes[i].val;
+            //            table[test_nodes[i].key] = "This is a pretty long
+            //            string all other things being equal";
+            table[test_nodes[i].key] = test_nodes[i].key;
 #else
             table[test_string_node[i]] = test_string_node_val[i];
 #endif
@@ -324,7 +336,6 @@ main(int argc, char ** argv) {
 static void
 correct_test() {
 
-#if 0
     uint8_t * taken        = (uint8_t *)calloc((1 << 25), sizeof(uint32_t));
     uint32_t  total_unique = 0;
     fht_table<uint32_t, uint32_t> table;
@@ -496,7 +507,6 @@ correct_test() {
             assert(table.find(test_nodes[i].key, &ret) == FHT_NOT_FOUND);
         }
     }
-#endif
 }
 
 
