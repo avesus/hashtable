@@ -1,6 +1,6 @@
 #include "driver.h"
 #include <vector>
-#define STR_TEST
+#define INT_TEST
 #define myfree free
 #define PRINT(V_LEVEL, ...)                                                    \
     {                                                                          \
@@ -265,7 +265,7 @@ main(int argc, char ** argv) {
 #ifdef INT_TEST
             counter ^= table.add(
                 (test_nodes + i)->key,
-                "This is a pretty long string all other things being equal");
+                "This is a pretty long string all other things being equal ");
             // counter ^= table.add((test_nodes + i)->key, (test_nodes +
             // i)->val);
 #elif defined TEST_TEST
@@ -289,8 +289,8 @@ main(int argc, char ** argv) {
     }
     else {
 #ifdef INT_TEST
-        //   ska::flat_hash_map<uint32_t, std::string> table(1 << init_size);
-        ska::flat_hash_map<uint32_t, uint32_t> table(1 << init_size);
+        ska::flat_hash_map<uint32_t, std::string> table(1 << init_size);
+        //        ska::flat_hash_map<uint32_t, uint32_t> table(1 << init_size);
 #else
         ska::flat_hash_map<std::string, std::string> table(1 << init_size);
 #endif
@@ -299,13 +299,13 @@ main(int argc, char ** argv) {
         clock_gettime(CLOCK_MONOTONIC, &start);
         for (uint32_t i = 0; i < FHT_TEST_SIZE; i++) {
 #ifdef INT_TEST
-            //            table[test_nodes[i].key] = "This is a pretty long
-            //            string all other things being equal";
-            table[test_nodes[i].key] = test_nodes[i].key;
+            table[test_nodes[i].key] = "This is a pretty long"
+                "string all other things being equal ";
+            // table[test_nodes[i].key] = test_nodes[i].key;
 #else
             table[test_string_node[i]] = test_string_node_val[i];
 #endif
-            for (uint32_t j = i * Q_PER_INS; j < (i + 1) * Q_PER_INS; j++) {
+                for (uint32_t j = i * Q_PER_INS; j < (i + 1) * Q_PER_INS; j++) {
 #ifdef INT_TEST
                 volatile auto res = table.find(test_keys[j]);
 #else

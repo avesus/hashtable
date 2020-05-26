@@ -527,7 +527,7 @@ fht_table<K, V, Returner, Hasher, Allocator>::resize() {
     // allocate new chunk array
     fht_chunk<K, V> * const new_chunks = this->alloc_mmap.init_mem(_num_chunks);
 
-    uint32_t to_replace_idx = 0;
+
     // techincally max number of items possible (though hyper unlikely)
     uint32_t to_replace_raw_slots[L1_CACHE_LINE_SIZE];
 
@@ -542,8 +542,9 @@ fht_table<K, V, Returner, Hasher, Allocator>::resize() {
     // iterate through all chunks and re-place nodes
     for (uint32_t i = 0; i < _num_chunks; i++) {
         uint64_t                to_replace = 0, ideal_idx = 0;
-        fht_chunk<K, V> * const old_chunk = old_chunks + i;
-        fht_chunk<K, V> * const new_chunk = new_chunks + i;
+        uint32_t                to_replace_idx = 0;
+        fht_chunk<K, V> * const old_chunk      = old_chunks + i;
+        fht_chunk<K, V> * const new_chunk      = new_chunks + i;
         for (uint32_t j = 0; j < FHT_NODES_PER_CACHE_LINE; j++) {
 
             // if node is invalid or deleted skip it
@@ -595,6 +596,46 @@ fht_table<K, V, Returner, Hasher, Allocator>::resize() {
         }
 
         uint64_t idx;
+        uint64_t first_place = to_replace;
+        for (uint32_t new_j = FHT_SEARCH_NUMBER; new_j < FHT_SEARCH_NUMBER;
+             new_j++) {
+            uint64_t loop_first_place = first_place;
+            while (loop_first_place) {
+                __asm__("tzcnt %1, %0"
+                        : "=r"((idx))
+                        : "rm"((loop_first_place)));
+                loop_first_place ^= ((1UL) << idx);
+                const uint32_t raw_slot  = to_replace_raw_slots[idx];
+                const uint32_t start_idx = GEN_START_IDX(raw_slot);
+                const uint8_t  tag       = GEN_TAG(raw_slot) | VALID_MASK;
+                const uint32_t test_idx  = GEN_TEST_IDX(start_idx, new_j);
+                if (test_idx == idx) {
+                    old_chunk->tags[idx] = tag;
+                    to_replace ^= ((1UL) << idx);
+                    first_place ^= ((1UL) << idx);
+                    to_replace_idx--;
+                    continue;
+                }
+                else if (to_replace & ((1UL) << test_idx)) {
+                    first_place ^= ((1UL) << idx);
+                    continue;
+                }
+                else if (!IS_VALID(old_chunk->get_tag_n(test_idx))) {
+                    old_chunk->set_key_val_tag(test_idx,
+                                               old_chunk->get_key_n(idx),
+                                               old_chunk->get_val_n(idx),
+                                               tag);
+                    to_replace ^= ((1UL) << idx);
+                    first_place ^= ((1UL) << idx);
+                    to_replace_idx--;
+                    continue;
+                }
+            }
+            if (!first_place) {
+                break;
+            }
+        }
+
         // the reality is even though this adds an int + operation branch
         // predictor is much better with standard loops than bitscan loops
         for (uint32_t j = 0; j < to_replace_idx; j++) {
@@ -620,6 +661,7 @@ fht_table<K, V, Returner, Hasher, Allocator>::resize() {
                     prev_placed |= ((1UL) << test_idx);
                     complete = 0;
                     do {
+
                         const uint32_t _raw_slot =
                             to_replace_raw_slots[from_idx];
                         const uint32_t _start_idx = GEN_START_IDX(_raw_slot);
@@ -628,8 +670,8 @@ fht_table<K, V, Returner, Hasher, Allocator>::resize() {
                         for (uint32_t _new_j = 0; _new_j < FHT_SEARCH_NUMBER;
                              _new_j++) {
                             const uint32_t _test_idx =
-
                                 GEN_TEST_IDX(_start_idx, _new_j);
+
                             if (_test_idx == idx) {
                                 temp_K   = old_chunk->get_key_n(from_idx);
                                 temp_V   = old_chunk->get_val_n(from_idx);
@@ -641,7 +683,6 @@ fht_table<K, V, Returner, Hasher, Allocator>::resize() {
                                 continue;
                             }
                             else if (to_replace & ((1UL) << _test_idx)) {
-
                                 move_order[move_order_idx] = from_idx;
                                 move_order[move_order_idx] <<= 16;  // from slot
                                 move_order[move_order_idx++] |=
@@ -672,7 +713,6 @@ fht_table<K, V, Returner, Hasher, Allocator>::resize() {
                         const uint8_t  _tag =
                             GEN_TAG(to_replace_raw_slots[from_slot]) |
                             VALID_MASK;
-
                         to_replace ^= ((1UL) << to_slot);
                         to_replace_idx--;
                         old_chunk->set_key_val_tag(
@@ -689,7 +729,7 @@ fht_table<K, V, Returner, Hasher, Allocator>::resize() {
                     }
                     break;
                 }
-                else if (old_chunk->get_tag_n(test_idx)) {
+                else if (!IS_VALID(old_chunk->get_tag_n(test_idx))) {
                     old_chunk->set_key_val_tag(test_idx,
                                                old_chunk->get_key_n(idx),
                                                old_chunk->get_val_n(idx),
@@ -698,7 +738,6 @@ fht_table<K, V, Returner, Hasher, Allocator>::resize() {
                 }
             }
         }
-        to_replace_idx = 0;
     }
     return old_chunks;
 }
