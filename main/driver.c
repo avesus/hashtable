@@ -1,7 +1,7 @@
 #include "driver.h"
 #include <vector>
 
-#define INT_STR_TEST
+#define STR_TEST
 #define myfree free
 #define PRINT(V_LEVEL, ...)                                                    \
     {                                                                          \
@@ -202,7 +202,7 @@ main(int argc, char ** argv) {
         (test_node_t *)calloc(FHT_TEST_SIZE, sizeof(test_node_t));
 
     for (uint32_t i = 0; i < FHT_TEST_SIZE; i++) {
-        (test_nodes + i)->key = random() % (1 << 25);
+        (test_nodes + i)->key = random();
         (test_nodes + i)->val = i;
     }
 

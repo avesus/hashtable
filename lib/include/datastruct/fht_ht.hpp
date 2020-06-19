@@ -63,7 +63,7 @@ struct _fht_empty_t {};
 
 // max memory willing to use (this doesn't really have effect with default
 // allocator)
-const uint64_t FHT_MAX_MEMORY = ((1UL) << 32);
+const uint64_t FHT_MAX_MEMORY = ((1UL) << 30);
 
 // default init size (since mmap is backend for allocation less than page size
 // has no effect)
@@ -156,11 +156,39 @@ struct DEFAULT_MMAP_ALLOC;
 // resize)
 template<typename K, typename V>
 struct INPLACE_MMAP_ALLOC;
-//////////////////////////////////////////////////////////////////////
 
-// forward declaration of some basic helpers
-static uint32_t log_b2(uint64_t n);
-static uint32_t roundup_next_p2(uint32_t v);
+//////////////////////////////////////////////////////////////////////
+// helpers
+inline uint64_t
+log_b2(uint64_t n) {
+    uint64_t s, t;
+    t = (n > 0xffffffffffffffff) << 6;
+    n >>= t;
+    t = (n > 0xffffffff) << 5;
+    n >>= t;
+    t = (n > 0xffff) << 4;
+    n >>= t;
+    s = (n > 0xff) << 3;
+    n >>= s, t |= s;
+    s = (n > 0xf) << 2;
+    n >>= s, t |= s;
+    s = (n > 0x3) << 1;
+    n >>= s, t |= s;
+    return (t | (n >> 1));
+}
+
+inline uint64_t
+roundup_next_p2(uint64_t v) {
+    v--;
+    v |= v >> 1;
+    v |= v >> 2;
+    v |= v >> 4;
+    v |= v >> 8;
+    v |= v >> 16;
+    v |= v >> 32;
+    v++;
+    return v;
+}
 
 // these get optimized to popcnt. For resize
 static inline uint32_t
@@ -426,7 +454,7 @@ class fht_table {
     using ret_type_t  = typename Returner::ret_type_t;
 
    public:
-    fht_table(uint32_t init_size);
+    fht_table(const uint64_t init_size);
     // defaults to FHT_DEFAULT_INIT_SIZE (really???)
     fht_table();
     ~fht_table();
@@ -487,7 +515,7 @@ template<typename K,
          typename Hasher,
          typename Allocator>
 fht_table<K, V, Returner, Hasher, Allocator>::fht_table(
-    const uint32_t init_size) {
+    const uint64_t init_size) {
 
     // ensure init_size is above min
     const uint64_t _init_size =
@@ -1346,7 +1374,7 @@ struct HASH_64_CPP_STR {
 template<typename K>
 struct DEFAULT_HASH_64 {
 
-    //we dont want 64 bit hash of 32 bit val....
+    // we dont want 64 bit hash of 32 bit val....
     template<typename _K = K>
     using _hash_type_t =
         typename std::conditional<(std::is_arithmetic<_K>::value &&
@@ -1410,9 +1438,9 @@ myMmap(void *        addr,
     return p;
 }
 
-// allocation with mmap
+// allocation with mmap. (1 << 27 is just a guess at an address thats not taken)
 #define mymmap_alloc(X)                                                        \
-    myMmap(NULL,                                                               \
+    myMmap((void *)((1UL) << 27),                                              \
            (X),                                                                \
            (PROT_READ | PROT_WRITE),                                           \
            (MAP_ANONYMOUS | MAP_PRIVATE),                                      \
@@ -1476,15 +1504,19 @@ struct OPTIMIZED_MMAP_ALLOC {
 template<typename K, typename V>
 struct INPLACE_MMAP_ALLOC {
 
-
-    size_t start_offset;
-    void * base_address;
+    uint32_t          cur_size;
+    uint32_t          start_offset;
+    fht_chunk<K, V> * base_address;
     INPLACE_MMAP_ALLOC() {
-        this->base_address = mymmap_alloc(FHT_MAX_MEMORY);
+        this->base_address = (fht_chunk<K, V> *)mymmap_alloc(
+            sizeof(fht_chunk<K, V>) *
+            (FHT_MAX_MEMORY / sizeof(fht_chunk<K, V>)));
+
+        this->cur_size     = FHT_MAX_MEMORY / sizeof(fht_chunk<K, V>);
         this->start_offset = 0;
     }
     ~INPLACE_MMAP_ALLOC() {
-        mymunmap(this->base_address, FHT_MAX_MEMORY);
+        mymunmap(this->base_address, this->cur_size);
     }
 
     constexpr void *
@@ -1514,7 +1546,18 @@ struct INPLACE_MMAP_ALLOC {
         fht_chunk<K, V> * const>::type
     init_mem(const size_t size) {
         const size_t old_start_offset = this->start_offset;
-        this->start_offset += size * sizeof(fht_chunk<K, V>);
+        this->start_offset += size;
+        if (this->start_offset >= this->cur_size) {
+            // maymove breaks inplace so no flags
+            void * ret = mremap((void *)this->base_address,
+                                sizeof(fht_chunk<K, V>) * this->cur_size,
+                                2 * sizeof(fht_chunk<K, V>) * this->cur_size,
+                                0);
+            if (ret == MAP_FAILED) {
+                assert(0);
+            }
+            this->cur_size = 2 * this->cur_size;
+        }
         return (fht_chunk<K, V> * const)(this->base_address + old_start_offset);
     }
 
@@ -1534,7 +1577,18 @@ struct INPLACE_MMAP_ALLOC {
         fht_chunk<K, V> * const>::type
     init_mem(const size_t size) {
         const size_t old_start_offset = this->start_offset;
-        this->start_offset += size * sizeof(fht_chunk<K, V>);
+        this->start_offset += size;
+        if (this->start_offset >= this->cur_size) {
+            // maymove breaks inplace so no flags
+            void * ret = mremap((void *)this->base_address,
+                                sizeof(fht_chunk<K, V>) * this->cur_size,
+                                2 * sizeof(fht_chunk<K, V>) * this->cur_size,
+                                0);
+            if (ret == MAP_FAILED) {
+                assert(0);
+            }
+            this->cur_size = 2 * this->cur_size;
+        }
         return (fht_chunk<K, V> * const) new (
             this->base_address + old_start_offset) fht_chunk<K, V>[size];
     }
@@ -1666,36 +1720,6 @@ struct DEFAULT_MMAP_ALLOC {
 #undef USING_LOCAL_MUNMAP
 #endif
 
-
-//////////////////////////////////////////////////////////////////////
-// Helpers for fht_table constructor
-static uint32_t
-log_b2(uint64_t n) {
-    uint64_t s, t;
-    t = (n > 0xffffffff) << 5;
-    n >>= t;
-    t = (n > 0xffff) << 4;
-    n >>= t;
-    s = (n > 0xff) << 3;
-    n >>= s, t |= s;
-    s = (n > 0xf) << 2;
-    n >>= s, t |= s;
-    s = (n > 0x3) << 1;
-    n >>= s, t |= s;
-    return (t | (n >> 1));
-}
-
-static uint32_t
-roundup_next_p2(uint32_t v) {
-    v--;
-    v |= v >> 1;
-    v |= v >> 2;
-    v |= v >> 4;
-    v |= v >> 8;
-    v |= v >> 16;
-    v++;
-    return v;
-}
 
 //////////////////////////////////////////////////////////////////////
 // Undefs
