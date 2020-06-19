@@ -1,6 +1,7 @@
 #include "driver.h"
 #include <vector>
-#define INT_TEST
+
+#define INT_STR_TEST
 #define myfree free
 #define PRINT(V_LEVEL, ...)                                                    \
     {                                                                          \
@@ -196,7 +197,7 @@ main(int argc, char ** argv) {
 
     // init random nodes
 
-#ifdef INT_TEST
+#if defined INT_TEST || defined INT_STR_TEST
     test_node_t * test_nodes =
         (test_node_t *)calloc(FHT_TEST_SIZE, sizeof(test_node_t));
 
@@ -248,8 +249,18 @@ main(int argc, char ** argv) {
 #endif
     if (which_table == OUR_TABLE) {
 #ifdef INT_TEST
-        fht_table<uint32_t, std::string> table(1 << init_size);
-        // fht_table<uint32_t, uint32_t> table(1 << init_size);
+
+        fht_table<uint32_t,
+                  uint32_t,
+                  DEFAULT_RETURNER<uint32_t>,
+                  HASH_64_4<uint32_t>>
+            table(1 << init_size);
+
+#elif defined INT_STR_TEST
+        fht_table<uint32_t,
+                  std::string,
+            DEFAULT_RETURNER<std::string>,
+                  DEFAULT_HASH_64<uint32_t>> table(1 << init_size);
 #elif defined TEST_TEST
         fht_table<test_type, test_type> table(1 << init_size);
 #else
@@ -263,11 +274,12 @@ main(int argc, char ** argv) {
         std::string * str_ret;
         for (uint32_t i = 0; i < FHT_TEST_SIZE; i++) {
 #ifdef INT_TEST
+            counter ^= table.add((test_nodes + i)->key, (test_nodes + i)->val);
+#elif defined INT_STR_TEST
             counter ^= table.add(
                 (test_nodes + i)->key,
                 "This is a pretty long string all other things being equal ");
-            // counter ^= table.add((test_nodes + i)->key, (test_nodes +
-            // i)->val);
+
 #elif defined TEST_TEST
             counter ^= table.add(test_type_key[i], test_type_val[i]);
 
@@ -276,7 +288,8 @@ main(int argc, char ** argv) {
 #endif
             for (uint32_t j = i * Q_PER_INS; j < (i + 1) * Q_PER_INS; j++) {
 #ifdef INT_TEST
-                //  counter ^= table.find(test_keys[j], &ret);
+                counter ^= table.find(test_keys[j], &ret);
+#elif defined INT_STR_TEST
                 counter ^= table.find(test_keys[j], &str_ret);
 #elif defined TEST_TEST
                 counter ^= table.find(test_type_test_key[i], &test_ret);
@@ -289,8 +302,9 @@ main(int argc, char ** argv) {
     }
     else {
 #ifdef INT_TEST
+        ska::flat_hash_map<uint32_t, uint32_t> table(1 << init_size);
+#elif defined INT_STR_TEST
         ska::flat_hash_map<uint32_t, std::string> table(1 << init_size);
-        //        ska::flat_hash_map<uint32_t, uint32_t> table(1 << init_size);
 #else
         ska::flat_hash_map<std::string, std::string> table(1 << init_size);
 #endif
@@ -299,16 +313,22 @@ main(int argc, char ** argv) {
         clock_gettime(CLOCK_MONOTONIC, &start);
         for (uint32_t i = 0; i < FHT_TEST_SIZE; i++) {
 #ifdef INT_TEST
-            table[test_nodes[i].key] = "This is a pretty long"
+            table[test_nodes[i].key] = test_nodes[i].key;
+#elif defined INT_STR_TEST
+            table[test_nodes[i].key] =
+                "This is a pretty long"
                 "string all other things being equal ";
-            // table[test_nodes[i].key] = test_nodes[i].key;
+
 #else
             table[test_string_node[i]] = test_string_node_val[i];
 #endif
-                for (uint32_t j = i * Q_PER_INS; j < (i + 1) * Q_PER_INS; j++) {
+            for (uint32_t j = i * Q_PER_INS; j < (i + 1) * Q_PER_INS; j++) {
 #ifdef INT_TEST
                 volatile auto res = table.find(test_keys[j]);
+#elif defined INT_STR_TEST
+                volatile auto res = table.find(test_keys[j]);
 #else
+
                 volatile auto res = table.find(test_string_key[j]);
 #endif
             }

@@ -10,7 +10,7 @@
 #undef GET_NTH_BIT
 #undef VALID_MASK
 #undef DELETE_MASK
-#undef CONTENT_MASK
+#undef IS_PLACEABLE
 #undef IS_VALID
 #undef SET_VALID
 #undef SET_UNVALID
@@ -18,12 +18,6 @@
 #undef SET_DELETED
 #undef SET_UNDELETED
 #undef RESIZE_SKIP
-#undef CONTENT_OFFSE
-#undef GET_CONTENT
 #undef GEN_TAG
 #undef GEN_START_IDX
-#undef IDX_MOD
-#undef GEN_TEST_IDX
-#undef SET_KEY_VAL
-#undef COMPARE_KEYS
 //////////////////////////////////////////////////////////////////////

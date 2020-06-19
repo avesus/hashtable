@@ -2,6 +2,7 @@ include common.mk
 
 
 $(shell mkdir -p $(OBJ_DIR))
+
 $(shell mkdir -p bin)
 
 
