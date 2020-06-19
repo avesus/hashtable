@@ -258,7 +258,7 @@ struct fht_chunk {
 
     // actual content of chunk
     __m128i tags_vec[FHT_MM_LINE];
-    node_t nodes;
+    node_t  nodes;
 
 
     void
@@ -277,11 +277,6 @@ struct fht_chunk {
     constexpr const uint8_t
     get_tag_n(const uint32_t n) const {
         return ((uint8_t * const)this->tags_vec)[n];
-    }
-
-    constexpr uint8_t * const
-    get_tag_n_ptr(const uint32_t n) const {
-        return (((uint8_t * const)this->tags_vec)) + n;
     }
 
 
@@ -399,9 +394,9 @@ struct fht_chunk {
                     key_pass_t     new_key,
                     val_pass_t     new_val,
                     const uint8_t  tag) {
-        this->tags[n]            = tag;
-        this->nodes.nodes[n].key = new_key;
-        this->nodes.nodes[n].val = new_val;
+        ((uint8_t * const)this->tags_vec)[n] = tag;
+        this->nodes.nodes[n].key             = new_key;
+        this->nodes.nodes[n].val             = new_val;
     }
 };
 //////////////////////////////////////////////////////////////////////
@@ -446,10 +441,13 @@ class fht_table {
         fht_chunk<_K, _V> * const>::type
     resize();
 
-    using hash_type_t = typename Hasher::hash_type_t;
-    using key_pass_t  = typename fht_chunk<K, V>::key_pass_t;
-    using val_pass_t  = typename fht_chunk<K, V>::val_pass_t;
-    using ret_type_t  = typename Returner::ret_type_t;
+    template<typename _K = K, typename _Hasher = Hasher>
+    using _hash_type_t = typename std::result_of<_Hasher(K)>::type;
+    typedef _hash_type_t<K, Hasher> hash_type_t;
+
+    using key_pass_t = typename fht_chunk<K, V>::key_pass_t;
+    using val_pass_t = typename fht_chunk<K, V>::val_pass_t;
+    using ret_type_t = typename Returner::ret_type_t;
 
    public:
     fht_table(const uint64_t init_size);
@@ -583,15 +581,16 @@ fht_table<K, V, Returner, Hasher, Allocator>::resize() {
     fht_chunk<K, V> * const new_chunks = this->alloc_mmap.init_mem(_num_chunks);
 
 
+    uint32_t to_move = 0;
+    uint32_t new_starts;
+    uint32_t old_start_good_slots;
     // iterate through all chunks and re-place nodes
     for (uint32_t i = 0; i < _num_chunks; i++) {
-        uint32_t new_starts           = 0;
-        uint32_t old_start_good_slots = 0;
+        new_starts           = 0;
+        old_start_good_slots = 0;
 
-        uint32_t old_start_pos[4] = { 0 };
-
-        uint32_t to_move              = 0;
-        uint64_t old_start_to_move[4] = { 0 };
+        uint32_t old_start_pos[FHT_MM_LINE]     = { 0 };
+        uint64_t old_start_to_move[FHT_MM_LINE] = { 0 };
 
 
         fht_chunk<K, V> * const old_chunk = old_chunks + i;
@@ -642,70 +641,67 @@ fht_table<K, V, Returner, Hasher, Allocator>::resize() {
             }
         }
 
+        uint64_t to_move_idx;
+        uint32_t to_place_idx;
         while (to_move) {
-
-            for (uint32_t _j = 0; _j < FHT_MM_LINE; _j++) {
-                if (to_move & (1 << _j)) {
+            for (uint32_t j = 0; j < FHT_MM_LINE; j++) {
+                if (to_move & (1 << j)) {
                     // has space and has items to move to it
-                    while (old_start_pos[_j] != 0xffff &&
-                           old_start_to_move[_j]) {
-                        uint64_t to_move_idx;
-                        uint32_t to_place_idx;
+                    while (old_start_pos[j] != 0xffff && old_start_to_move[j]) {
 
                         __asm__("tzcnt %1, %0"
                                 : "=r"((to_move_idx))
-                                : "rm"((old_start_to_move[_j])));
-                        old_start_to_move[_j] ^= ((1UL) << to_move_idx);
+                                : "rm"((old_start_to_move[j])));
+                        old_start_to_move[j] ^= ((1UL) << to_move_idx);
 
                         __asm__("tzcnt %1, %0"
                                 : "=r"((to_place_idx))
-                                : "rm"((~old_start_pos[_j])));
+                                : "rm"((~old_start_pos[j])));
 
                         old_chunk->set_key_val_tag(
-                            FHT_MM_IDX_MULT * _j + to_place_idx,
+                            FHT_MM_IDX_MULT * j + to_place_idx,
                             old_chunk->get_key_n(to_move_idx),
                             old_chunk->get_val_n(to_move_idx),
                             old_chunk->get_tag_n(to_move_idx));
 
                         old_chunk->set_tag_n(to_move_idx, 0);
 
-                        old_start_good_slots += (1 << (8 * _j));
-                        old_start_pos[_j] |= (1 << to_place_idx);
+                        old_start_good_slots += (1 << (8 * j));
+                        old_start_pos[j] |= (1 << to_place_idx);
                         old_start_pos[to_move_idx / FHT_MM_IDX_MULT] ^=
                             (1 << (to_move_idx & FHT_MM_IDX_MASK));
                     }
-                    if (old_start_to_move[_j] &&
-                        ((old_start_good_slots >> (8 * _j)) & 0xff) ==
+                    if (old_start_to_move[j] &&
+                        ((old_start_good_slots >> (8 * j)) & 0xff) ==
                             FHT_MM_IDX_MULT) {
 
                         // move the indexes that this need to be placed (i.e if
-                        // any of the nodes that needed to be moved to _j (now
-                        // _j + 1) are already in _j + 1 we can remove them from
+                        // any of the nodes that needed to be moved to j (now
+                        // j + 1) are already in j + 1 we can remove them from
                         // to_move list
-                        old_start_to_move[(_j + 1) & FHT_MM_LINE_MASK] |=
+                        old_start_to_move[(j + 1) & FHT_MM_LINE_MASK] |=
                             (~((0xffffUL) << (FHT_MM_IDX_MULT *
-                                              ((_j + 1) & FHT_MM_LINE_MASK)))) &
-                            old_start_to_move[_j];
+                                              ((j + 1) & FHT_MM_LINE_MASK)))) &
+                            old_start_to_move[j];
 
 
                         const uint32_t new_mask =
-                            (old_start_to_move[_j] >>
-                             (FHT_MM_IDX_MULT *
-                              ((_j + 1) & FHT_MM_LINE_MASK))) &
+                            (old_start_to_move[j] >>
+                             (FHT_MM_IDX_MULT * ((j + 1) & FHT_MM_LINE_MASK))) &
                             0xffff;
 
-                        old_start_pos[(_j + 1) & FHT_MM_LINE_MASK] |= new_mask;
+                        old_start_pos[(j + 1) & FHT_MM_LINE_MASK] |= new_mask;
                         old_start_good_slots +=
                             bitcount_32(new_mask)
-                            << (8 * ((_j + 1) & FHT_MM_LINE_MASK));
+                            << (8 * ((j + 1) & FHT_MM_LINE_MASK));
 
-                        if (old_start_to_move[(_j + 1) & FHT_MM_LINE_MASK]) {
-                            to_move |= (1 << ((_j + 1) & FHT_MM_LINE_MASK));
+                        if (old_start_to_move[(j + 1) & FHT_MM_LINE_MASK]) {
+                            to_move |= (1 << ((j + 1) & FHT_MM_LINE_MASK));
                         }
-                        old_start_to_move[_j] = 0;
+                        old_start_to_move[j] = 0;
                     }
-                    if (!old_start_to_move[_j]) {
-                        to_move ^= (1 << _j);
+                    if (!old_start_to_move[j]) {
+                        to_move ^= (1 << j);
                     }
                 }
             }
@@ -811,6 +807,7 @@ fht_table<K, V, Returner, Hasher, Allocator>::add(key_pass_t new_key,
     fht_chunk<K, V> * const chunk     = (fht_chunk<K, V> * const)(
         (this->chunks) + (HASH_TO_IDX(raw_slot, _log_incr)));
 
+    __builtin_prefetch(chunk);
 
     // get tag and start_idx from raw_slot
     const uint8_t  tag       = GEN_TAG(raw_slot);
@@ -818,7 +815,7 @@ fht_table<K, V, Returner, Hasher, Allocator>::add(key_pass_t new_key,
     const uint32_t start_idx = GEN_START_IDX(raw_slot);
 
     // prefetch is nice for performance here
-    __builtin_prefetch(chunk->get_tag_n_ptr(FHT_MM_IDX_MULT * start_idx));
+
     __builtin_prefetch(chunk->get_key_n_ptr((FHT_MM_IDX_MULT * start_idx)));
 
     // check for valid slot or duplicate
@@ -895,14 +892,14 @@ fht_table<K, V, Returner, Hasher, Allocator>::find(key_pass_t key,
     const hash_type_t             raw_slot  = this->hash(key);
     const fht_chunk<K, V> * const chunk     = (const fht_chunk<K, V> * const)(
         (this->chunks) + (HASH_TO_IDX(raw_slot, _log_incr)));
-
+    __builtin_prefetch(chunk);
 
     // by setting valid here we can remove delete check
     const __m128i  tag_match = FHT_MM_SET(GEN_TAG(raw_slot));
     const uint32_t start_idx = GEN_START_IDX(raw_slot);
 
     // prefetch is good for perf
-    __builtin_prefetch(chunk->get_tag_n_ptr(FHT_MM_IDX_MULT * start_idx));
+
     __builtin_prefetch(chunk->get_key_n_ptr((FHT_MM_IDX_MULT * start_idx)));
 
     // check for valid slot of duplicate
@@ -959,11 +956,12 @@ fht_table<K, V, Returner, Hasher, Allocator>::remove(key_pass_t key) const {
     const hash_type_t       raw_slot  = this->hash(key);
     fht_chunk<K, V> * const chunk     = (fht_chunk<K, V> * const)(
         (this->chunks) + (HASH_TO_IDX(raw_slot, _log_incr)));
+    __builtin_prefetch(chunk);
 
     const __m128i  tag_match = FHT_MM_SET(GEN_TAG(raw_slot));
     const uint32_t start_idx = GEN_START_IDX(raw_slot);
 
-    __builtin_prefetch(chunk->get_tag_n_ptr(start_idx & FHT_CACHE_IDX_MASK));
+
     __builtin_prefetch(chunk->get_key_n_ptr((FHT_MM_IDX_MULT * start_idx)));
 
     // check for valid slot of duplicate
@@ -1136,7 +1134,7 @@ struct DEFAULT_RETURNER {
     // this is case where builtin type is passed (imo ptr counts as thats
     // basically uint64)
     template<typename _V = V>
-    typename std::enable_if<(sizeof(_V) <= FHT_PASS_BY_VAL_THRESH), void>::type
+    constexpr typename std::enable_if<(sizeof(_V) <= FHT_PASS_BY_VAL_THRESH), void>::type
     to_ret_type(ret_type_t store_val, V * const val) const {
         if (store_val) {
             *store_val = *val;
@@ -1145,7 +1143,7 @@ struct DEFAULT_RETURNER {
 
     // this is case where ** is passed (bigger types)
     template<typename _V = V>
-    typename std::enable_if<(sizeof(_V) > FHT_PASS_BY_VAL_THRESH), void>::type
+    constexpr typename std::enable_if<(sizeof(_V) > FHT_PASS_BY_VAL_THRESH), void>::type
     to_ret_type(ret_type_t store_val, V * const val) const {
         if (store_val) {
             *store_val = val;
@@ -1160,11 +1158,9 @@ struct REF_RETURNER {
     using _ret_type_t = V &;
     typedef _ret_type_t<V> ret_type_t;
 
-    void
+    constexpr void
     to_ret_type(ret_type_t store_val, V const * val) const {
-        if (store_val) {
             store_val = *val;
-        }
     }
 };
 
@@ -1173,10 +1169,10 @@ template<typename V>
 struct PTR_RETURNER {
 
     template<typename _V = V>
-    using _ret_type_t = V *;
+    using _ret_type_t = V * const;
     typedef _ret_type_t<V> ret_type_t;
 
-    void
+    constexpr void
     to_ret_type(ret_type_t store_val, V const * val) const {
         if (store_val) {
             *store_val = *val;
@@ -1188,10 +1184,10 @@ template<typename V>
 struct PTR_PTR_RETURNER {
 
     template<typename _V = V>
-    using _ret_type_t = V **;
+    using _ret_type_t = V ** const;
     typedef _ret_type_t<V> ret_type_t;
 
-    void
+    constexpr void
     to_ret_type(ret_type_t store_val, V * val) const {
         if (store_val) {
             *store_val = val;
@@ -1226,20 +1222,18 @@ crc_32(const uint32_t * const data, const uint32_t len) {
 
 template<typename K>
 struct HASH_32 {
-    using hash_type_t = uint32_t;
-
-    const hash_type_t
+    
+    constexpr const uint32_t
     operator()(K const & key) const {
-        return crc_32((const hash_type_t * const)(&key), sizeof(K));
+        return crc_32((const uint32_t * const)(&key), sizeof(K));
     }
 };
 
 
 template<typename K>
 struct HASH_32_4 {
-    using hash_type_t = uint32_t;
 
-    const hash_type_t
+    constexpr const uint32_t
     operator()(const K key) const {
         return __builtin_ia32_crc32si(FHT_HASH_SEED, key);
     }
@@ -1247,9 +1241,8 @@ struct HASH_32_4 {
 
 template<typename K>
 struct HASH_32_8 {
-    using hash_type_t = uint32_t;
 
-    const hash_type_t
+    constexpr const uint32_t
     operator()(const K key) const {
         return __builtin_ia32_crc32si(FHT_HASH_SEED, key) ^
                __builtin_ia32_crc32si(FHT_HASH_SEED, key >> 32);
@@ -1258,47 +1251,48 @@ struct HASH_32_8 {
 
 template<typename K>
 struct HASH_32_CPP_STR {
-    using hash_type_t = uint32_t;
 
-    const hash_type_t
+    constexpr const uint32_t
     operator()(K const & key) const {
-        return crc_32((const hash_type_t * const)(key.c_str()), key.length());
+        return crc_32((const uint32_t * const)(key.c_str()), key.length());
     }
 };
 
 
 template<typename K>
 struct DEFAULT_HASH_32 {
-    using hash_type_t = uint32_t;
+
 
     template<typename _K = K>
-    typename std::enable_if<(std::is_arithmetic<_K>::value && sizeof(_K) <= 4),
-                            const hash_type_t>::type
+    constexpr typename std::enable_if<(std::is_arithmetic<_K>::value &&
+                                       sizeof(_K) <= 4),
+                                      const uint32_t>::type
     operator()(const K key) const {
         return __builtin_ia32_crc32si(FHT_HASH_SEED, key);
     }
 
     template<typename _K = K>
-    typename std::enable_if<(std::is_arithmetic<_K>::value && sizeof(_K) == 8),
-                            const hash_type_t>::type
+    constexpr typename std::enable_if<(std::is_arithmetic<_K>::value &&
+                                       sizeof(_K) == 8),
+                                      const uint32_t>::type
     operator()(const K key) const {
         return __builtin_ia32_crc32si(FHT_HASH_SEED, key) ^
                __builtin_ia32_crc32si(FHT_HASH_SEED, key >> 32);
     }
 
     template<typename _K = K>
-    typename std::enable_if<(std::is_same<_K, std::string>::value),
-                            const hash_type_t>::type
+    constexpr typename std::enable_if<(std::is_same<_K, std::string>::value),
+                                      const uint32_t>::type
     operator()(K const & key) const {
-        return crc_32((const hash_type_t * const)(key.c_str()), key.length());
+        return crc_32((const uint32_t * const)(key.c_str()), key.length());
     }
 
     template<typename _K = K>
-    typename std::enable_if<(!std::is_same<_K, std::string>::value) &&
-                                (!std::is_arithmetic<_K>::value),
-                            const hash_type_t>::type
+    constexpr typename std::enable_if<(!std::is_same<_K, std::string>::value) &&
+                                          (!std::is_arithmetic<_K>::value),
+                                      const uint32_t>::type
     operator()(K const & key) const {
-        return crc_32((const hash_type_t * const)(&key), sizeof(K));
+        return crc_32((const uint32_t * const)(&key), sizeof(K));
     }
 };
 
@@ -1329,9 +1323,8 @@ crc_64(const uint64_t * const data, const uint32_t len) {
 
 template<typename K>
 struct HASH_64 {
-    using hash_type_t = uint64_t;
 
-    const hash_type_t
+    constexpr const uint64_t
     operator()(K const & key) const {
         return crc_64((const uint64_t * const)(&key), sizeof(K));
     }
@@ -1341,9 +1334,9 @@ struct HASH_64 {
 // really no reason to 64 bit hash a 32 bit value...
 template<typename K>
 struct HASH_64_4 {
-    using hash_type_t = uint32_t;
 
-    const hash_type_t
+
+    constexpr const uint32_t
     operator()(const K key) const {
         return __builtin_ia32_crc32si(FHT_HASH_SEED, key);
     }
@@ -1351,9 +1344,8 @@ struct HASH_64_4 {
 
 template<typename K>
 struct HASH_64_8 {
-    using hash_type_t = uint64_t;
 
-    const hash_type_t
+    constexpr const uint64_t
     operator()(const K key) const {
         return _mm_crc32_u64(FHT_HASH_SEED, key);
     }
@@ -1361,9 +1353,8 @@ struct HASH_64_8 {
 
 template<typename K>
 struct HASH_64_CPP_STR {
-    using hash_type_t = uint64_t;
 
-    const hash_type_t
+    constexpr const uint64_t
     operator()(K const & key) const {
         return crc_64((const uint64_t * const)(key.c_str()), key.length());
     }
@@ -1375,39 +1366,32 @@ struct DEFAULT_HASH_64 {
 
     // we dont want 64 bit hash of 32 bit val....
     template<typename _K = K>
-    using _hash_type_t =
-        typename std::conditional<(std::is_arithmetic<_K>::value &&
-                                   sizeof(_K) <= 4),
-                                  uint32_t,
-                                  uint64_t>::type;
-
-    typedef _hash_type_t<K> hash_type_t;
-
-    template<typename _K = K>
-    typename std::enable_if<(std::is_arithmetic<_K>::value && sizeof(_K) <= 4),
-                            const hash_type_t>::type
+    constexpr typename std::enable_if<(std::is_arithmetic<_K>::value &&
+                                       sizeof(_K) <= 4),
+                                      const uint32_t>::type
     operator()(const K key) const {
         return __builtin_ia32_crc32si(FHT_HASH_SEED, key);
     }
 
     template<typename _K = K>
-    typename std::enable_if<(std::is_arithmetic<_K>::value && sizeof(_K) == 8),
-                            const hash_type_t>::type
+    constexpr typename std::enable_if<(std::is_arithmetic<_K>::value &&
+                                       sizeof(_K) == 8),
+                                      const uint64_t>::type
     operator()(const K key) const {
         return _mm_crc32_u64(FHT_HASH_SEED, key);
     }
 
     template<typename _K = K>
-    typename std::enable_if<(std::is_same<_K, std::string>::value),
-                            const hash_type_t>::type
+    constexpr typename std::enable_if<(std::is_same<_K, std::string>::value),
+                                      const uint64_t>::type
     operator()(K const & key) const {
         return crc_64((const uint64_t * const)(key.c_str()), key.length());
     }
 
     template<typename _K = K>
-    typename std::enable_if<(!std::is_same<_K, std::string>::value) &&
-                                (!std::is_arithmetic<_K>::value),
-                            const hash_type_t>::type
+    constexpr typename std::enable_if<(!std::is_same<_K, std::string>::value) &&
+                                          (!std::is_arithmetic<_K>::value),
+                                      const uint64_t>::type
     operator()(K const & key) const {
         return crc_64((const uint64_t * const)(&key), sizeof(K));
     }
