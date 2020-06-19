@@ -63,7 +63,8 @@ struct _fht_empty_t {};
 
 // max memory willing to use (this doesn't really have effect with default
 // allocator)
-const uint64_t FHT_MAX_MEMORY = ((1UL) << 30);
+const uint64_t FHT_DEFAULT_INIT_MEMORY = ((1UL) << 30);
+void * const FHT_DEFAULT_START_ADDRESS = (void *)((1UL) << 30);
 
 // default init size (since mmap is backend for allocation less than page size
 // has no effect)
@@ -1439,8 +1440,8 @@ myMmap(void *        addr,
 }
 
 // allocation with mmap. (1 << 27 is just a guess at an address thats not taken)
-#define mymmap_alloc(X)                                                        \
-    myMmap((void *)((1UL) << 27),                                              \
+#define mymmap_alloc(Y , X)                                                \
+    myMmap((Y),                                                         \
            (X),                                                                \
            (PROT_READ | PROT_WRITE),                                           \
            (MAP_ANONYMOUS | MAP_PRIVATE),                                      \
@@ -1478,11 +1479,11 @@ struct OPTIMIZED_MMAP_ALLOC {
     size_t start_offset;
     void * base_address;
     OPTIMIZED_MMAP_ALLOC() {
-        this->base_address = mymmap_alloc(FHT_MAX_MEMORY);
+        this->base_address = mymmap_alloc(NULL, FHT_DEFAULT_INIT_MEMORY);
         this->start_offset = 0;
     }
     ~OPTIMIZED_MMAP_ALLOC() {
-        mymunmap(this->base_address, FHT_MAX_MEMORY);
+        mymunmap(this->base_address, FHT_DEFAULT_INIT_MEMORY);
     }
 
     fht_chunk<K, V> * const
@@ -1508,11 +1509,11 @@ struct INPLACE_MMAP_ALLOC {
     uint32_t          start_offset;
     fht_chunk<K, V> * base_address;
     INPLACE_MMAP_ALLOC() {
-        this->base_address = (fht_chunk<K, V> *)mymmap_alloc(
+        this->base_address = (fht_chunk<K, V> *)mymmap_alloc(FHT_DEFAULT_START_ADDRESS,
             sizeof(fht_chunk<K, V>) *
-            (FHT_MAX_MEMORY / sizeof(fht_chunk<K, V>)));
+            (FHT_DEFAULT_INIT_MEMORY / sizeof(fht_chunk<K, V>)));
 
-        this->cur_size     = FHT_MAX_MEMORY / sizeof(fht_chunk<K, V>);
+        this->cur_size     = FHT_DEFAULT_INIT_MEMORY / sizeof(fht_chunk<K, V>);
         this->start_offset = 0;
     }
     ~INPLACE_MMAP_ALLOC() {
@@ -1608,7 +1609,7 @@ struct MMAP_ALLOC {
 
     fht_chunk<K, V> * const
     init_mem(const size_t size) const {
-        return (fht_chunk<K, V> * const)mymmap_alloc(size *
+        return (fht_chunk<K, V> * const)mymmap_alloc(NULL, size *
                                                      sizeof(fht_chunk<K, V>));
     }
     void
@@ -1621,11 +1622,11 @@ template<typename K, typename V>
 struct NEW_MMAP_ALLOC {
     void *
     operator new(size_t size) {
-        return mymmap_alloc(size);
+        return mymmap_alloc(NULL, size);
     }
     void *
     operator new[](size_t size) {
-        return mymmap_alloc(size);
+        return mymmap_alloc(NULL, size);
     }
 
     void
@@ -1653,11 +1654,11 @@ template<typename K, typename V>
 struct DEFAULT_MMAP_ALLOC {
     void *
     operator new(size_t size) {
-        return mymmap_alloc(size);
+        return mymmap_alloc(NULL, size);
     }
     void *
     operator new[](size_t size) {
-        return mymmap_alloc(size);
+        return mymmap_alloc(NULL, size);
     }
 
     void
@@ -1680,7 +1681,7 @@ struct DEFAULT_MMAP_ALLOC {
             (std::is_arithmetic<_V>::value || std::is_pointer<_V>::value),
         fht_chunk<K, V> * const>::type
     init_mem(const size_t size) const {
-        return (fht_chunk<K, V> * const)mymmap_alloc(size *
+        return (fht_chunk<K, V> * const)mymmap_alloc(NULL, size *
                                                      sizeof(fht_chunk<K, V>));
     }
     template<typename _K = K, typename _V = V>

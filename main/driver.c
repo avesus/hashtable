@@ -1,7 +1,7 @@
 #include "driver.h"
 #include <vector>
 
-#define STR_TEST
+#define INT_TEST
 #define myfree free
 #define PRINT(V_LEVEL, ...)                                                    \
     {                                                                          \
