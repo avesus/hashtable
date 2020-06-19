@@ -63,8 +63,8 @@ struct _fht_empty_t {};
 
 // max memory willing to use (this doesn't really have effect with default
 // allocator)
-const uint64_t FHT_DEFAULT_INIT_MEMORY = ((1UL) << 30);
-void * const FHT_DEFAULT_START_ADDRESS = (void *)((1UL) << 30);
+const uint64_t FHT_DEFAULT_INIT_MEMORY   = ((1UL) << 30);
+void * const   FHT_DEFAULT_START_ADDRESS = (void *)((1UL) << 30);
 
 // default init size (since mmap is backend for allocation less than page size
 // has no effect)
@@ -257,34 +257,34 @@ struct fht_chunk {
     typedef local_node_t<K, V> node_t;
 
     // actual content of chunk
-    union {
-        uint8_t tags[L1_CACHE_LINE_SIZE];
-        __m128i tags_vec[FHT_MM_LINE];
-    };
+    //    union {
+    //        uint8_t tags[L1_CACHE_LINE_SIZE];
+    __m128i tags_vec[FHT_MM_LINE];
+    //    };
     node_t nodes;
 
 
     void
     delete_tag_n(const uint32_t n) {
-        SET_DELETED(this->tags[n]);
+        SET_DELETED(((uint8_t * const)this->tags_vec)[n]);
     }
 
     // this undeletes
     void
     set_tag_n(const uint32_t n, const uint8_t new_tag) {
-        this->tags[n] = new_tag;
+        ((uint8_t * const)this->tags_vec)[n] = new_tag;
     }
 
 
     // the following exist for key/val in a far more complicated format
     constexpr const uint8_t
     get_tag_n(const uint32_t n) const {
-        return this->tags[n];
+        return ((uint8_t * const)this->tags_vec)[n];
     }
 
     constexpr uint8_t * const
     get_tag_n_ptr(const uint32_t n) const {
-        return (uint8_t * const)(&(this->tags[n]));
+        return (((uint8_t * const)this->tags_vec)) + n;
     }
 
 
@@ -343,9 +343,9 @@ struct fht_chunk {
                     val_pass_t     new_val,
                     const uint8_t  tag) {
 
-        this->tags[n]       = tag;
-        this->nodes.keys[n] = new_key;
-        this->nodes.vals[n] = new_val;
+        ((uint8_t * const)this->tags_vec)[n] = tag;
+        this->nodes.keys[n]                  = new_key;
+        this->nodes.vals[n]                  = new_val;
     }
 
 
@@ -610,8 +610,8 @@ fht_table<K, V, Returner, Hasher, Allocator>::resize() {
             const uint32_t    start_idx = GEN_START_IDX(raw_slot);
 
             if (GET_NTH_BIT(raw_slot, _new_log_incr - 1)) {
-                const uint8_t tag  = old_chunk->get_tag_n(j);
-                old_chunk->tags[j] = 0;
+                const uint8_t tag = old_chunk->get_tag_n(j);
+                old_chunk->set_tag_n(j, 0);
 
                 // place new node w.o duplicate check
 
@@ -830,7 +830,6 @@ fht_table<K, V, Returner, Hasher, Allocator>::add(key_pass_t new_key,
         const uint32_t test_idx = (j + start_idx) & FHT_MM_LINE_MASK;
 
         slot_mask = FHT_MM_MASK(tag_match, chunk->tags_vec[test_idx]);
-
         while (slot_mask) {
             __asm__("tzcnt %1, %0" : "=r"((idx)) : "rm"((slot_mask)));
             if (__builtin_expect(
@@ -840,6 +839,7 @@ fht_table<K, V, Returner, Hasher, Allocator>::add(key_pass_t new_key,
 
                 return FHT_NOT_ADDED;
             }
+
             slot_mask ^= (1 << idx);
         }
 
@@ -913,6 +913,7 @@ fht_table<K, V, Returner, Hasher, Allocator>::find(key_pass_t key,
     for (uint32_t j = 0; j < FHT_MM_LINE; j++) {
         // seeded with start_idx we go through idx function
         const uint32_t test_idx = (j + start_idx) & FHT_MM_LINE_MASK;
+
 
         slot_mask = FHT_MM_MASK(tag_match, chunk->tags_vec[test_idx]);
 
@@ -1439,9 +1440,9 @@ myMmap(void *        addr,
     return p;
 }
 
-// allocation with mmap. (1 << 27 is just a guess at an address thats not taken)
-#define mymmap_alloc(Y , X)                                                \
-    myMmap((Y),                                                         \
+
+#define mymmap_alloc(Y, X)                                                     \
+    myMmap((Y),                                                                \
            (X),                                                                \
            (PROT_READ | PROT_WRITE),                                           \
            (MAP_ANONYMOUS | MAP_PRIVATE),                                      \
@@ -1509,9 +1510,10 @@ struct INPLACE_MMAP_ALLOC {
     uint32_t          start_offset;
     fht_chunk<K, V> * base_address;
     INPLACE_MMAP_ALLOC() {
-        this->base_address = (fht_chunk<K, V> *)mymmap_alloc(FHT_DEFAULT_START_ADDRESS,
+        this->base_address = (fht_chunk<K, V> *)mymmap_alloc(
+            FHT_DEFAULT_START_ADDRESS,
             sizeof(fht_chunk<K, V>) *
-            (FHT_DEFAULT_INIT_MEMORY / sizeof(fht_chunk<K, V>)));
+                (FHT_DEFAULT_INIT_MEMORY / sizeof(fht_chunk<K, V>)));
 
         this->cur_size     = FHT_DEFAULT_INIT_MEMORY / sizeof(fht_chunk<K, V>);
         this->start_offset = 0;
@@ -1550,11 +1552,11 @@ struct INPLACE_MMAP_ALLOC {
         this->start_offset += size;
         if (this->start_offset >= this->cur_size) {
             // maymove breaks inplace so no flags
-            void * ret = mremap((void *)this->base_address,
-                                sizeof(fht_chunk<K, V>) * this->cur_size,
-                                2 * sizeof(fht_chunk<K, V>) * this->cur_size,
-                                0);
-            if (ret == MAP_FAILED) {
+            if (MAP_FAILED ==
+                mremap((void *)this->base_address,
+                       sizeof(fht_chunk<K, V>) * this->cur_size,
+                       2 * sizeof(fht_chunk<K, V>) * this->cur_size,
+                       0)) {
                 assert(0);
             }
             this->cur_size = 2 * this->cur_size;
@@ -1581,11 +1583,11 @@ struct INPLACE_MMAP_ALLOC {
         this->start_offset += size;
         if (this->start_offset >= this->cur_size) {
             // maymove breaks inplace so no flags
-            void * ret = mremap((void *)this->base_address,
-                                sizeof(fht_chunk<K, V>) * this->cur_size,
-                                2 * sizeof(fht_chunk<K, V>) * this->cur_size,
-                                0);
-            if (ret == MAP_FAILED) {
+            if (MAP_FAILED ==
+                mremap((void *)this->base_address,
+                       sizeof(fht_chunk<K, V>) * this->cur_size,
+                       2 * sizeof(fht_chunk<K, V>) * this->cur_size,
+                       0)) {
                 assert(0);
             }
             this->cur_size = 2 * this->cur_size;
@@ -1609,8 +1611,9 @@ struct MMAP_ALLOC {
 
     fht_chunk<K, V> * const
     init_mem(const size_t size) const {
-        return (fht_chunk<K, V> * const)mymmap_alloc(NULL, size *
-                                                     sizeof(fht_chunk<K, V>));
+        return (fht_chunk<K, V> * const)mymmap_alloc(
+            NULL,
+            size * sizeof(fht_chunk<K, V>));
     }
     void
     deinit_mem(fht_chunk<K, V> * const ptr, const size_t size) const {
@@ -1681,8 +1684,9 @@ struct DEFAULT_MMAP_ALLOC {
             (std::is_arithmetic<_V>::value || std::is_pointer<_V>::value),
         fht_chunk<K, V> * const>::type
     init_mem(const size_t size) const {
-        return (fht_chunk<K, V> * const)mymmap_alloc(NULL, size *
-                                                     sizeof(fht_chunk<K, V>));
+        return (fht_chunk<K, V> * const)mymmap_alloc(
+            NULL,
+            size * sizeof(fht_chunk<K, V>));
     }
     template<typename _K = K, typename _V = V>
     typename std::enable_if<
