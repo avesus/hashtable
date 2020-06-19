@@ -257,10 +257,7 @@ struct fht_chunk {
     typedef local_node_t<K, V> node_t;
 
     // actual content of chunk
-    //    union {
-    //        uint8_t tags[L1_CACHE_LINE_SIZE];
     __m128i tags_vec[FHT_MM_LINE];
-    //    };
     node_t nodes;
 
 
