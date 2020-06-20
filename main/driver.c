@@ -115,6 +115,7 @@ int32_t  verbose       = 0;
 int32_t  rseed         = 0;
 uint32_t FHT_TEST_SIZE = (10);
 uint32_t Q_PER_INS     = 0;
+uint32_t D_PER_INS     = 0;
 uint32_t init_size     = 0;
 uint32_t which_table   = OUR_TABLE;
 uint32_t fun_guess     = 0;
@@ -126,6 +127,7 @@ static ArgOption args[] = {
   { KindOption,   Integer, 		"-i",       0,     &init_size,  	"Log_2 for init size of table" },
   { KindOption,   Integer, 		"-s",       0,     &FHT_TEST_SIZE,	"Log 2 for test size" },
   { KindOption,   Integer, 		"-q",       0,     &Q_PER_INS,  	"True value for queries per insert" },
+  { KindOption,   Integer, 		"-d",       0,     &D_PER_INS,  	"True value for deletes per insert" },
   { KindOption,   Set,   		"-w",       0,     &which_table,  	"dont set for our table, set for other table" },
   { KindOption,   Integer, 		"-f",       0,     &fun_guess,  	"test possible spread functions" },
   { KindOption,   Integer, 		"--seed", 	0,     &rseed,  		"Set random number seed" },
@@ -212,6 +214,12 @@ main(int argc, char ** argv) {
     for (uint32_t i = 0; i < FHT_TEST_SIZE * Q_PER_INS; i++) {
         test_keys[i] = test_nodes[random() % FHT_TEST_SIZE].key;
     }
+    uint32_t * del_keys =
+        (uint32_t *)calloc(FHT_TEST_SIZE * D_PER_INS, sizeof(uint32_t));
+    for (uint32_t i = 0; i < FHT_TEST_SIZE * D_PER_INS; i++) {
+        del_keys[i] = test_nodes[random() % FHT_TEST_SIZE].key;
+    }
+
 #elif defined TEST_TEST
     std::vector<test_type> test_type_key;
     std::vector<test_type> test_type_val;
@@ -259,14 +267,23 @@ main(int argc, char ** argv) {
 #elif defined INT_STR_TEST
         fht_table<uint32_t,
                   std::string,
-            DEFAULT_RETURNER<std::string>,
-                  DEFAULT_HASH_32<uint32_t>> table(1 << init_size);
+                  DEFAULT_RETURNER<std::string>,
+                  DEFAULT_HASH_32<uint32_t>>
+            table(1 << init_size);
 #elif defined TEST_TEST
         fht_table<test_type, test_type> table(1 << init_size);
 #else
         fht_table<std::string, std::string> table(1 << init_size);
 #endif
         // run perf test
+#ifdef INT_TEST
+        for (uint32_t i = 0; i < FHT_TEST_SIZE; i++) {
+            table.add((test_nodes + i)->key, (test_nodes + i)->val);
+        }
+        for (uint32_t i = 0; i < FHT_TEST_SIZE; i++) {
+            table.remove((test_nodes + i)->key);
+        }
+        #endif
         clock_gettime(CLOCK_MONOTONIC, &start);
         uint32_t      counter = 0;
         uint32_t      ret     = 0;
@@ -297,6 +314,11 @@ main(int argc, char ** argv) {
                 counter ^= table.find(test_string_key[j], &str_ret);
 #endif
             }
+#ifdef INT_TEST
+            for (uint32_t j = i * D_PER_INS; j < (i + 1) * D_PER_INS; j++) {
+                counter ^= table.remove(del_keys[j]);
+            }
+#endif
         }
         volatile uint32_t sink = counter;
     }
@@ -332,6 +354,11 @@ main(int argc, char ** argv) {
                 volatile auto res = table.find(test_string_key[j]);
 #endif
             }
+#ifdef INT_TEST
+            for (uint32_t j = i * D_PER_INS; j < (i + 1) * D_PER_INS; j++) {
+                volatile auto res = table.erase(del_keys[j]);
+            }
+#endif
         }
         volatile uint32_t sink = counter;
     }
