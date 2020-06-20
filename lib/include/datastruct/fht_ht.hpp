@@ -894,7 +894,8 @@ fht_table<K, V, Returner, Hasher, Allocator>::add(key_pass_t new_key,
                     chunk->is_deleted_n(FHT_MM_IDX_MULT * test_idx + idx)) {
                     del_idx = FHT_MM_IDX_MULT * test_idx + idx;
                 }
-                else if (chunk->is_invalid_n(FHT_MM_IDX_MULT * test_idx + idx)) {
+                else if (chunk->is_invalid_n(FHT_MM_IDX_MULT * test_idx +
+                                             idx)) {
                     if (del_idx != FHT_NODES_PER_CACHE_LINE) {
                         chunk->set_key_val_tag(del_idx, new_key, new_val, tag);
                     }
