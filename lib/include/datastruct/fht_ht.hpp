@@ -48,6 +48,7 @@ const uint32_t FHT_DELETED     = 1;
 
 // these will use the "optimized" find/remove. Basically I find this is
 // important with string keys and thats about all. Seperate types with ,
+// worth noting generally insert heavy does better with special.
 struct _fht_empty_t {};
 #define FHT_SPECIAL_TYPES std::string, _fht_empty_t
 
@@ -88,16 +89,15 @@ const uint32_t FHT_HASH_SEED = 0;
 #define FHT_MM_MASK(X, Y) _mm_movemask_epi8(_mm_cmpeq_epi8(X, Y))
 #define FHT_MM_EMPTY(X)   _mm_movemask_epi8(_mm_sign_epi8(X, X))
 
-const __m128i FHT_MM_SPECIAL = FHT_MM_SET(0xff);
-const __m128i FHT_MM_DELETED = FHT_MM_SET(0xff);
+static const __m128i FHT_MM_DELETED = FHT_MM_SET(0xff);
 #define FHT_MM_EMPTY_OR_DEL(X)                                                 \
-    _mm_movemask_epi8(_mm_cmpgt_epi8(FHT_MM_SPECIAL, X))
+    _mm_movemask_epi8(_mm_cmpgt_epi8(FHT_MM_DELETED, X))
 
-const uint32_t FHT_MM_LINE      = FHT_NODES_PER_CACHE_LINE / sizeof(__m128i);
-const uint32_t FHT_MM_LINE_MASK = FHT_MM_LINE - 1;
+static const uint32_t FHT_MM_LINE      = FHT_NODES_PER_CACHE_LINE / sizeof(__m128i);
+static const uint32_t FHT_MM_LINE_MASK = FHT_MM_LINE - 1;
 
-const uint32_t FHT_MM_IDX_MULT = FHT_NODES_PER_CACHE_LINE / FHT_MM_LINE;
-const uint32_t FHT_MM_IDX_MASK = FHT_MM_IDX_MULT - 1;
+static const uint32_t FHT_MM_IDX_MULT = FHT_NODES_PER_CACHE_LINE / FHT_MM_LINE;
+static const uint32_t FHT_MM_IDX_MASK = FHT_MM_IDX_MULT - 1;
 
 
 //////////////////////////////////////////////////////////////////////
@@ -424,7 +424,7 @@ template<typename K,
          typename V,
          typename Returner  = DEFAULT_RETURNER<V>,
          typename Hasher    = DEFAULT_HASH_64<K>,
-         typename Allocator = DEFAULT_MMAP_ALLOC<K, V>>
+         typename Allocator = INPLACE_MMAP_ALLOC<K, V>>
 class fht_table {
 
     // log of table size
@@ -784,12 +784,16 @@ fht_table<K, V, Returner, Hasher, Allocator>::resize() {
         // which one is optimal here really depends on the quality of the hash
         // function.
 #ifdef BVEC_ITER
-        uint64_t taken_slots, j;
+        uint64_t       taken_slots, j;
+        
+        const uint32_t temp_taken_slots =
+            old_chunk->get_empty_or_del(1) | old_chunk->get_empty_or_del(0);
+        
+        taken_slots = (old_chunk->get_empty_or_del(3) << 16) |
+                      old_chunk->get_empty_or_del(2);
 
-        taken_slots = old_chunk->get_empty_or_del(3);
-        taken_slots = (taken_slots << 16) | old_chunk->get_empty_or_del(2);
-        taken_slots = (taken_slots << 16) | old_chunk->get_empty_or_del(1);
-        taken_slots = (taken_slots << 16) | old_chunk->get_empty_or_del(0);
+
+        taken_slots = (taken_slots << 32) | temp_taken_slots;
         taken_slots = ~taken_slots;
 
         while (taken_slots) {
