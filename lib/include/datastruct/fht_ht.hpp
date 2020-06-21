@@ -607,7 +607,6 @@ fht_table<K, V, Returner, Hasher, Allocator>::resize() {
     // allocate new chunk array
     fht_chunk<K, V> * const new_chunks = this->alloc_mmap.init_mem(_num_chunks);
 
-
     uint32_t to_move = 0;
     uint32_t new_starts;
     uint32_t old_start_good_slots;
@@ -622,6 +621,7 @@ fht_table<K, V, Returner, Hasher, Allocator>::resize() {
 
         fht_chunk<K, V> * const old_chunk = old_chunks + i;
         fht_chunk<K, V> * const new_chunk = new_chunks + i;
+
         for (uint32_t j = 0; j < FHT_NODES_PER_CACHE_LINE; j++) {
 
             // if node is invalid or deleted skip it
@@ -629,6 +629,7 @@ fht_table<K, V, Returner, Hasher, Allocator>::resize() {
                 old_chunk->set_tag_n(j, INVALID_MASK);
                 continue;
             }
+
             const hash_type_t raw_slot  = this->hash(old_chunk->get_key_n(j));
             const uint32_t    start_idx = GEN_START_IDX(raw_slot);
 
@@ -780,12 +781,28 @@ fht_table<K, V, Returner, Hasher, Allocator>::resize() {
 
         const fht_chunk<K, V> * const old_chunk = old_chunks + i;
 
+        // which one is optimal here really depends on the quality of the hash function.
+#ifdef BVEC_ITER
+        uint64_t taken_slots, j;
+
+        taken_slots = old_chunk->get_empty_or_del(3);
+        taken_slots = (taken_slots << 16) | old_chunk->get_empty_or_del(2);
+        taken_slots = (taken_slots << 16) | old_chunk->get_empty_or_del(1);
+        taken_slots = (taken_slots << 16) | old_chunk->get_empty_or_del(0);
+        taken_slots = ~taken_slots;
+
+        while (taken_slots) {
+            __asm__("tzcnt %1, %0" : "=r"((j)) : "rm"((taken_slots)));
+            taken_slots ^= ((1UL) << j);
+#else
         for (uint32_t j = 0; j < FHT_NODES_PER_CACHE_LINE; j++) {
 
             // if node is invalid or deleted skip it
             if (__builtin_expect(RESIZE_SKIP(old_chunk->get_tag_n(j)), 0)) {
                 continue;
             }
+#endif
+
             const hash_type_t raw_slot  = this->hash(old_chunk->get_key_n(j));
             const uint32_t    start_idx = GEN_START_IDX(raw_slot);
             const uint32_t nth_bit = GET_NTH_BIT(raw_slot, _new_log_incr - 1);
@@ -883,16 +900,15 @@ fht_table<K, V, Returner, Hasher, Allocator>::add(key_pass_t new_key,
             slot_mask ^= (1 << idx);
         }
 
+
         if (del_idx == FHT_NODES_PER_CACHE_LINE) {
 
             slot_mask = chunk->get_empty_or_del(test_idx);
-
             while (slot_mask) {
                 __asm__("tzcnt %1, %0" : "=r"((idx)) : "rm"((slot_mask)));
                 slot_mask ^= (1 << idx);
 
                 if (chunk->is_deleted_n(FHT_MM_IDX_MULT * test_idx + idx)) {
-
                     // even though this adds an operation it avoids worst case
                     // where alot of deleted items = unnecissary iterations. 2
                     // iterations approx = this cost.
