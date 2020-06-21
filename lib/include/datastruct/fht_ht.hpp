@@ -93,7 +93,7 @@ static const __m128i FHT_MM_DELETED = FHT_MM_SET(0xff);
 #define FHT_MM_EMPTY_OR_DEL(X)                                                 \
     _mm_movemask_epi8(_mm_cmpgt_epi8(FHT_MM_DELETED, X))
 
-static const uint32_t FHT_MM_LINE      = FHT_NODES_PER_CACHE_LINE / sizeof(__m128i);
+static const uint32_t FHT_MM_LINE = FHT_NODES_PER_CACHE_LINE / sizeof(__m128i);
 static const uint32_t FHT_MM_LINE_MASK = FHT_MM_LINE - 1;
 
 static const uint32_t FHT_MM_IDX_MULT = FHT_NODES_PER_CACHE_LINE / FHT_MM_LINE;
@@ -640,17 +640,17 @@ fht_table<K, V, Returner, Hasher, Allocator>::resize() {
                 // place new node w.o duplicate check
 
                 for (uint32_t new_j = 0; new_j < FHT_MM_LINE; new_j++) {
-                    const uint32_t test_idx =
+                    const uint32_t outer_idx =
                         (new_j + start_idx) & FHT_MM_LINE_MASK;
                     const uint32_t inner_idx =
-                        (new_starts >> (8 * test_idx)) & 0xff;
+                        (new_starts >> (8 * outer_idx)) & 0xff;
                     if (__builtin_expect(inner_idx != FHT_MM_IDX_MULT, 1)) {
                         new_chunk->set_key_val_tag(
-                            FHT_MM_IDX_MULT * test_idx + inner_idx,
+                            FHT_MM_IDX_MULT * outer_idx + inner_idx,
                             old_chunk->get_key_n(j),
                             old_chunk->get_val_n(j),
                             tag);
-                        new_starts += (1 << (8 * test_idx));
+                        new_starts += (1 << (8 * outer_idx));
                         break;
                     }
                 }
@@ -785,10 +785,9 @@ fht_table<K, V, Returner, Hasher, Allocator>::resize() {
         // function.
 #ifdef BVEC_ITER
         uint64_t       taken_slots, j;
-        
         const uint32_t temp_taken_slots =
             old_chunk->get_empty_or_del(1) | old_chunk->get_empty_or_del(0);
-        
+
         taken_slots = (old_chunk->get_empty_or_del(3) << 16) |
                       old_chunk->get_empty_or_del(2);
 
@@ -883,19 +882,21 @@ fht_table<K, V, Returner, Hasher, Allocator>::add(key_pass_t new_key,
     const uint32_t start_idx = GEN_START_IDX(raw_slot);
 
     // prefetch is nice for performance here
+    if(FHT_IS_SPECIAL_(FHT_SPECIAL_TYPES)) {
+        __builtin_prefetch(chunk->get_key_n_ptr((FHT_MM_IDX_MULT * start_idx)));        
+    }
 
-    __builtin_prefetch(chunk->get_key_n_ptr((FHT_MM_IDX_MULT * start_idx)));
 
     // check for valid slot or duplicate
     uint32_t idx, slot_mask, del_idx = FHT_NODES_PER_CACHE_LINE;
     for (uint32_t j = 0; j < FHT_MM_LINE; j++) {
-        const uint32_t test_idx = (j + start_idx) & FHT_MM_LINE_MASK;
+        const uint32_t outer_idx = (j + start_idx) & FHT_MM_LINE_MASK;
 
-        slot_mask = FHT_MM_MASK(tag_match, chunk->tags_vec[test_idx]);
+        slot_mask = FHT_MM_MASK(tag_match, chunk->tags_vec[outer_idx]);
         while (slot_mask) {
             __asm__("tzcnt %1, %0" : "=r"((idx)) : "rm"((slot_mask)));
             if (__builtin_expect(
-                    (chunk->compare_key_n(FHT_MM_IDX_MULT * test_idx + idx,
+                    (chunk->compare_key_n(FHT_MM_IDX_MULT * outer_idx + idx,
                                           new_key)),
                     1)) {
 
@@ -908,28 +909,29 @@ fht_table<K, V, Returner, Hasher, Allocator>::add(key_pass_t new_key,
 
         if (del_idx == FHT_NODES_PER_CACHE_LINE) {
 
-            slot_mask = chunk->get_empty_or_del(test_idx);
+            slot_mask = chunk->get_empty_or_del(outer_idx);
             while (slot_mask) {
                 __asm__("tzcnt %1, %0" : "=r"((idx)) : "rm"((slot_mask)));
                 slot_mask ^= (1 << idx);
 
-                if (chunk->is_deleted_n(FHT_MM_IDX_MULT * test_idx + idx)) {
+                if (chunk->is_deleted_n(FHT_MM_IDX_MULT * outer_idx + idx)) {
                     // even though this adds an operation it avoids worst case
                     // where alot of deleted items = unnecissary iterations. 2
                     // iterations approx = this cost.
-                    if (slot_mask && chunk->get_empty(test_idx)) {
-                        chunk->set_key_val_tag(FHT_MM_IDX_MULT * test_idx + idx,
-                                               new_key,
-                                               new_val,
-                                               tag);
+                    if (slot_mask && chunk->get_empty(outer_idx)) {
+                        chunk->set_key_val_tag(
+                            FHT_MM_IDX_MULT * outer_idx + idx,
+                            new_key,
+                            new_val,
+                            tag);
                         return FHT_ADDED;
                     }
 
-                    del_idx = FHT_MM_IDX_MULT * test_idx + idx;
+                    del_idx = FHT_MM_IDX_MULT * outer_idx + idx;
                     break;
                 }
                 else {
-                    chunk->set_key_val_tag(FHT_MM_IDX_MULT * test_idx + idx,
+                    chunk->set_key_val_tag(FHT_MM_IDX_MULT * outer_idx + idx,
                                            new_key,
                                            new_val,
                                            tag);
@@ -937,7 +939,7 @@ fht_table<K, V, Returner, Hasher, Allocator>::add(key_pass_t new_key,
                 }
             }
         }
-        else if (__builtin_expect(chunk->get_empty(test_idx), 1)) {
+        else if (__builtin_expect(chunk->get_empty(outer_idx), 1)) {
             chunk->set_key_val_tag(del_idx, new_key, new_val, tag);
             return FHT_ADDED;
         }
@@ -957,12 +959,12 @@ fht_table<K, V, Returner, Hasher, Allocator>::add(key_pass_t new_key,
 
     // after resize add without duplication check
     for (uint32_t j = 0; j < FHT_MM_LINE; j++) {
-        const uint32_t test_idx = (j + start_idx) & FHT_MM_LINE_MASK;
+        const uint32_t outer_idx = (j + start_idx) & FHT_MM_LINE_MASK;
 
-        slot_mask = new_chunk->get_empty(test_idx);
+        slot_mask = new_chunk->get_empty(outer_idx);
         if (__builtin_expect(slot_mask, 1)) {
             __asm__("tzcnt %1, %0" : "=r"((idx)) : "rm"((slot_mask)));
-            new_chunk->set_key_val_tag(FHT_MM_IDX_MULT * test_idx + idx,
+            new_chunk->set_key_val_tag(FHT_MM_IDX_MULT * outer_idx + idx,
                                        new_key,
                                        new_val,
                                        tag);
@@ -1001,32 +1003,31 @@ fht_table<K, V, Returner, Hasher, Allocator>::find(key_pass_t key,
     const uint32_t start_idx = GEN_START_IDX(raw_slot);
 
     // prefetch is good for perf
-
     __builtin_prefetch(chunk->get_key_n_ptr((FHT_MM_IDX_MULT * start_idx)));
 
     // check for valid slot of duplicate
     uint32_t idx, slot_mask;
     for (uint32_t j = 0; j < FHT_MM_LINE; j++) {
         // seeded with start_idx we go through idx function
-        const uint32_t test_idx = (j + start_idx) & FHT_MM_LINE_MASK;
+        const uint32_t outer_idx = (j + start_idx) & FHT_MM_LINE_MASK;
 
 
-        slot_mask = FHT_MM_MASK(tag_match, chunk->tags_vec[test_idx]);
+        slot_mask = FHT_MM_MASK(tag_match, chunk->tags_vec[outer_idx]);
 
         while (slot_mask) {
             __asm__("tzcnt %1, %0" : "=r"((idx)) : "rm"((slot_mask)));
             if (__builtin_expect(
-                    (chunk->compare_key_n(FHT_MM_IDX_MULT * test_idx + idx,
+                    (chunk->compare_key_n(FHT_MM_IDX_MULT * outer_idx + idx,
                                           key)),
                     1)) {
                 this->returner.to_ret_type(
                     store_val,
-                    chunk->get_val_n_ptr(FHT_MM_IDX_MULT * test_idx + idx));
+                    chunk->get_val_n_ptr(FHT_MM_IDX_MULT * outer_idx + idx));
                 return FHT_FOUND;
             }
             slot_mask ^= (1 << idx);
         }
-        if (__builtin_expect(chunk->get_empty(test_idx), 1)) {
+        if (__builtin_expect(chunk->get_empty(outer_idx), 1)) {
             return FHT_NOT_FOUND;
         }
     }
@@ -1069,20 +1070,21 @@ fht_table<K, V, Returner, Hasher, Allocator>::remove(key_pass_t key) const {
     uint32_t idx, slot_mask;
     for (uint32_t j = 0; j < FHT_MM_LINE; j++) {
 
-        const uint32_t test_idx = (j + start_idx) & FHT_MM_LINE_MASK;
+        const uint32_t outer_idx = (j + start_idx) & FHT_MM_LINE_MASK;
 
-        slot_mask = FHT_MM_MASK(tag_match, chunk->tags_vec[test_idx]);
+        slot_mask = FHT_MM_MASK(tag_match, chunk->tags_vec[outer_idx]);
 
         while (slot_mask) {
             __asm__("tzcnt %1, %0" : "=r"((idx)) : "rm"((slot_mask)));
-            if ((chunk->compare_key_n(FHT_MM_IDX_MULT * test_idx + idx, key))) {
-                chunk->delete_tag_n(FHT_MM_IDX_MULT * test_idx + idx);
+            if ((chunk->compare_key_n(FHT_MM_IDX_MULT * outer_idx + idx,
+                                      key))) {
+                chunk->delete_tag_n(FHT_MM_IDX_MULT * outer_idx + idx);
                 return FHT_DELETED;
             }
             slot_mask ^= (1 << idx);
         }
 
-        if (__builtin_expect(chunk->get_empty(test_idx), 1)) {
+        if (__builtin_expect(chunk->get_empty(outer_idx), 1)) {
             return FHT_NOT_DELETED;
         }
     }
@@ -1135,24 +1137,24 @@ fht_table<K, V, Returner, Hasher, Allocator>::find(key_pass_t key,
     uint32_t idx, slot_mask;
     for (uint32_t j = 0; j < FHT_MM_LINE; j++) {
         // seeded with start_idx we go through idx function
-        const uint32_t test_idx = (j + start_idx) & FHT_MM_LINE_MASK;
+        const uint32_t outer_idx = (j + start_idx) & FHT_MM_LINE_MASK;
 
-        slot_mask = FHT_MM_MASK(tag_match, tags[test_idx]);
+        slot_mask = FHT_MM_MASK(tag_match, tags[outer_idx]);
 
         while (slot_mask) {
             __asm__("tzcnt %1, %0" : "=r"((idx)) : "rm"((slot_mask)));
 
-            if ((nodes[FHT_MM_IDX_MULT * test_idx + idx].key == key)) {
+            if ((nodes[FHT_MM_IDX_MULT * outer_idx + idx].key == key)) {
                 this->returner.to_ret_type(
                     store_val,
                     (V * const)(
-                        &(nodes[FHT_MM_IDX_MULT * test_idx + idx].val)));
+                        &(nodes[FHT_MM_IDX_MULT * outer_idx + idx].val)));
                 return FHT_FOUND;
             }
             slot_mask ^= (1 << idx);
         }
 
-        if (__builtin_expect(FHT_MM_EMPTY(tags[test_idx]), 1)) {
+        if (__builtin_expect(FHT_MM_EMPTY(tags[outer_idx]), 1)) {
             return FHT_NOT_FOUND;
         }
     }
@@ -1195,20 +1197,20 @@ fht_table<K, V, Returner, Hasher, Allocator>::remove(key_pass_t key) const {
     uint32_t idx, slot_mask;
     for (uint32_t j = 0; j < FHT_MM_LINE; j++) {
 
-        const uint32_t test_idx = (j + start_idx) & FHT_MM_LINE_MASK;
+        const uint32_t outer_idx = (j + start_idx) & FHT_MM_LINE_MASK;
 
-        slot_mask = FHT_MM_MASK(tag_match, tags[test_idx]);
+        slot_mask = FHT_MM_MASK(tag_match, tags[outer_idx]);
 
         while (slot_mask) {
             __asm__("tzcnt %1, %0" : "=r"((idx)) : "rm"((slot_mask)));
-            if ((nodes[FHT_MM_IDX_MULT * test_idx + idx].key == key)) {
-                SET_DELETED(tags8[FHT_MM_IDX_MULT * test_idx + idx]);
+            if ((nodes[FHT_MM_IDX_MULT * outer_idx + idx].key == key)) {
+                SET_DELETED(tags8[FHT_MM_IDX_MULT * outer_idx + idx]);
                 return FHT_DELETED;
             }
             slot_mask ^= (1 << idx);
         }
 
-        if (__builtin_expect(FHT_MM_EMPTY(tags[test_idx]), 1)) {
+        if (__builtin_expect(FHT_MM_EMPTY(tags[outer_idx]), 1)) {
             return FHT_NOT_DELETED;
         }
     }

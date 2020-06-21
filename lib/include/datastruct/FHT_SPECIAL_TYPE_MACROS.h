@@ -55,8 +55,12 @@
 #define FHT_APPLY_OP_19(m, op, x1, x2, x3, x4, x5, x6, x7, x8, x9, x10, x11, x12, x13, x14, x15, x16, x17, x18, x19) m(x1) op m(x2) op m(x3) op m(x4) op m(x5) op m(x6) op m(x7) op m(x8) op m(x9) op m(x10) op m(x11) op m(x12) op m(x13) op m(x14) op m(x15) op m(x16) op m(x17) op m(x18) op m(x19)
 #define FHT_APPLY_OP_20(m, op,  x1, x2, x3, x4, x5, x6, x7, x8, x9, x10, x11, x12, x13, x14, x15, x16, x17, x18, x19, x20) m(x1) op m(x2) op m(x3) op m(x4) op m(x5) op m(x6) op m(x7) op m(x8) op m(x9) op m(x10) op m(x11) op m(x12) op m(x13) op m(x14) op m(x15) op m(x16) op m(x17) op m(x18) op m(x19) op m(x20)
 
+#define FHT_IS_SAME_(X) (std::is_same<K, X>::value)
+#define FHT_IS_SPECIAL_(...) (FHT_APPLY_OP(FHT_IS_SAME_, ||,  __VA_ARGS__))
+    
 #define FHT_IS_SAME(X) (std::is_same<_K, X>::value)
 #define FHT_IS_SPECIAL(...) (FHT_APPLY_OP(FHT_IS_SAME, ||,  __VA_ARGS__))
+
 #define FHT_NOT_SPECIAL(...) (!(FHT_APPLY_OP(FHT_IS_SAME, ||, __VA_ARGS__)))
     
 #endif
