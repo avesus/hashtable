@@ -49,7 +49,7 @@ const uint32_t FHT_DELETED     = 1;
 // these will use the "optimized" find/remove. Basically I find this is
 // important with string keys and thats about all. Seperate types with ,
 struct _fht_empty_t {};
-#define FHT_SPECIAL_TYPES std::string, uint32_t, _fht_empty_t
+#define FHT_SPECIAL_TYPES std::string, _fht_empty_t
 
 
 // tunable but less important
@@ -424,7 +424,7 @@ template<typename K,
          typename V,
          typename Returner  = DEFAULT_RETURNER<V>,
          typename Hasher    = DEFAULT_HASH_64<K>,
-         typename Allocator = INPLACE_MMAP_ALLOC<K, V>>
+         typename Allocator = DEFAULT_MMAP_ALLOC<K, V>>
 class fht_table {
 
     // log of table size
@@ -781,7 +781,8 @@ fht_table<K, V, Returner, Hasher, Allocator>::resize() {
 
         const fht_chunk<K, V> * const old_chunk = old_chunks + i;
 
-        // which one is optimal here really depends on the quality of the hash function.
+        // which one is optimal here really depends on the quality of the hash
+        // function.
 #ifdef BVEC_ITER
         uint64_t taken_slots, j;
 
