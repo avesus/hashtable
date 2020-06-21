@@ -276,7 +276,7 @@ main(int argc, char ** argv) {
         fht_table<std::string, std::string> table(1 << init_size);
 #endif
         // run perf test
-#ifdef INT_TEST
+#ifdef INeT_TEST
         for (uint32_t i = 0; i < FHT_TEST_SIZE; i++) {
             table.add((test_nodes + i)->key, (test_nodes + i)->val);
         }

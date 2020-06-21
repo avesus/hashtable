@@ -446,7 +446,7 @@ class fht_table {
              typename _Allocator = Allocator>
     typename std::enable_if<
         std::is_same<_Allocator, INPLACE_MMAP_ALLOC<_K, _V>>::value,
-        fht_chunk<_K, _V> * const>::type
+        void>::type
     resize();
 
     // standard resize which copies all elements
@@ -457,7 +457,7 @@ class fht_table {
              typename _Allocator = Allocator>
     typename std::enable_if<
         !(std::is_same<_Allocator, INPLACE_MMAP_ALLOC<_K, _V>>::value),
-        fht_chunk<_K, _V> * const>::type
+        void>::type
     resize();
 
     template<typename _K = K, typename _Hasher = Hasher>
@@ -593,7 +593,7 @@ template<typename _K,
          typename _Allocator>
 typename std::enable_if<
     std::is_same<_Allocator, INPLACE_MMAP_ALLOC<_K, _V>>::value,
-    fht_chunk<_K, _V> * const>::type
+    void>::type
 fht_table<K, V, Returner, Hasher, Allocator>::resize() {
 
     // incr table log
@@ -741,8 +741,6 @@ fht_table<K, V, Returner, Hasher, Allocator>::resize() {
             }
         }
     }
-
-    return old_chunks;
 }
 
 // Resize Standard
@@ -758,7 +756,7 @@ template<typename _K,
          typename _Allocator>
 typename std::enable_if<
     !(std::is_same<_Allocator, INPLACE_MMAP_ALLOC<_K, _V>>::value),
-    fht_chunk<_K, _V> * const>::type
+    void>::type
 fht_table<K, V, Returner, Hasher, Allocator>::resize() {
 
     // incr table log
@@ -835,9 +833,8 @@ fht_table<K, V, Returner, Hasher, Allocator>::resize() {
     this->alloc_mmap.deinit_mem(
         (fht_chunk<K, V> * const)old_chunks,
         ((1 << (_new_log_incr - 1)) / FHT_NODES_PER_CACHE_LINE));
-
-    return new_chunks;
 }
+
 
 //////////////////////////////////////////////////////////////////////
 // Add Key Val
@@ -887,30 +884,39 @@ fht_table<K, V, Returner, Hasher, Allocator>::add(key_pass_t new_key,
         }
 
         if (del_idx == FHT_NODES_PER_CACHE_LINE) {
+
             slot_mask = chunk->get_empty_or_del(test_idx);
+
             while (slot_mask) {
                 __asm__("tzcnt %1, %0" : "=r"((idx)) : "rm"((slot_mask)));
-                if (del_idx == FHT_NODES_PER_CACHE_LINE &&
-                    chunk->is_deleted_n(FHT_MM_IDX_MULT * test_idx + idx)) {
-                    del_idx = FHT_MM_IDX_MULT * test_idx + idx;
-                }
-                else if (chunk->is_invalid_n(FHT_MM_IDX_MULT * test_idx +
-                                             idx)) {
-                    if (del_idx != FHT_NODES_PER_CACHE_LINE) {
-                        chunk->set_key_val_tag(del_idx, new_key, new_val, tag);
-                    }
-                    else {
+                slot_mask ^= (1 << idx);
+
+                if (chunk->is_deleted_n(FHT_MM_IDX_MULT * test_idx + idx)) {
+
+                    // even though this adds an operation it avoids worst case
+                    // where alot of deleted items = unnecissary iterations. 2
+                    // iterations approx = this cost.
+                    if (slot_mask && chunk->get_empty(test_idx)) {
                         chunk->set_key_val_tag(FHT_MM_IDX_MULT * test_idx + idx,
                                                new_key,
                                                new_val,
                                                tag);
+                        return FHT_ADDED;
                     }
+
+                    del_idx = FHT_MM_IDX_MULT * test_idx + idx;
+                    break;
+                }
+                else {
+                    chunk->set_key_val_tag(FHT_MM_IDX_MULT * test_idx + idx,
+                                           new_key,
+                                           new_val,
+                                           tag);
                     return FHT_ADDED;
                 }
-                slot_mask ^= (1 << idx);
             }
         }
-        else if (chunk->get_empty(test_idx)) {
+        else if (__builtin_expect(chunk->get_empty(test_idx), 1)) {
             chunk->set_key_val_tag(del_idx, new_key, new_val, tag);
             return FHT_ADDED;
         }
@@ -922,8 +928,10 @@ fht_table<K, V, Returner, Hasher, Allocator>::add(key_pass_t new_key,
     }
 
     // no valid slot found so resize
+    this->resize();
+
     fht_chunk<K, V> * const new_chunk = (fht_chunk<K, V> * const)(
-        this->resize() + HASH_TO_IDX(raw_slot, _log_incr + 1));
+        this->chunks + +HASH_TO_IDX(raw_slot, _log_incr + 1));
 
 
     // after resize add without duplication check
@@ -997,7 +1005,7 @@ fht_table<K, V, Returner, Hasher, Allocator>::find(key_pass_t key,
             }
             slot_mask ^= (1 << idx);
         }
-        if (chunk->get_empty(test_idx)) {
+        if (__builtin_expect(chunk->get_empty(test_idx), 1)) {
             return FHT_NOT_FOUND;
         }
     }
@@ -1053,7 +1061,7 @@ fht_table<K, V, Returner, Hasher, Allocator>::remove(key_pass_t key) const {
             slot_mask ^= (1 << idx);
         }
 
-        if (chunk->get_empty(test_idx)) {
+        if (__builtin_expect(chunk->get_empty(test_idx), 1)) {
             return FHT_NOT_DELETED;
         }
     }
@@ -1123,7 +1131,7 @@ fht_table<K, V, Returner, Hasher, Allocator>::find(key_pass_t key,
             slot_mask ^= (1 << idx);
         }
 
-        if (FHT_MM_EMPTY(tags[test_idx])) {
+        if (__builtin_expect(FHT_MM_EMPTY(tags[test_idx]), 1)) {
             return FHT_NOT_FOUND;
         }
     }
@@ -1179,7 +1187,7 @@ fht_table<K, V, Returner, Hasher, Allocator>::remove(key_pass_t key) const {
             slot_mask ^= (1 << idx);
         }
 
-        if (FHT_MM_EMPTY(tags[test_idx])) {
+        if (__builtin_expect(FHT_MM_EMPTY(tags[test_idx]), 1)) {
             return FHT_NOT_DELETED;
         }
     }
