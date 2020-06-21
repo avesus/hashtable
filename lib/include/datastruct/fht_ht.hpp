@@ -1291,7 +1291,7 @@ struct PTR_PTR_RETURNER {
     typedef _ret_type_t<V> ret_type_t;
 
     constexpr void
-    to_ret_type(ret_type_t store_val, V * val) const {
+    to_ret_type(ret_type_t store_val, V * const val) const {
         if (store_val) {
             *store_val = val;
         }
