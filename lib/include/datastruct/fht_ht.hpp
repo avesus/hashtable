@@ -630,7 +630,8 @@ fht_table<K, V, Returner, Hasher, Allocator>::resize() {
         fht_chunk<K, V> * const new_chunk = new_chunks + i;
 
 
-        //all intents and purposes not an important optimization but faster way to reset deleted
+        // all intents and purposes not an important optimization but faster way
+        // to reset deleted
         __m256i * const set_tags_vec = (__m256i * const)(old_chunk->tags_vec);
 
         set_tags_vec[0] = _mm256_blendv_epi8(set_tags_vec[0],
@@ -639,9 +640,18 @@ fht_table<K, V, Returner, Hasher, Allocator>::resize() {
         set_tags_vec[1] = _mm256_blendv_epi8(set_tags_vec[1],
                                              _mm256_set1_epi8(0x80),
                                              set_tags_vec[1]);
-        uint64_t j, iter_mask =
-            ~((((uint64_t)_mm256_movemask_epi8(set_tags_vec[1])) << 32) |
-              (_mm256_movemask_epi8(set_tags_vec[0]) & 0xffffffff));
+
+        // for some reason this is slower??
+        /*        set_tags_vec[0] =
+            _mm256_min_epu8(set_tags_vec[0], _mm256_set1_epi8(0x80));
+
+        set_tags_vec[1] =
+            _mm256_min_epu8(set_tags_vec[1], _mm256_set1_epi8(0x80));*/
+
+        uint64_t j,
+            iter_mask =
+                ~((((uint64_t)_mm256_movemask_epi8(set_tags_vec[1])) << 32) |
+                  (_mm256_movemask_epi8(set_tags_vec[0]) & 0xffffffff));
 
         while (iter_mask) {
             __asm__("tzcnt %1, %0" : "=r"((j)) : "rm"((iter_mask)));
@@ -765,6 +775,7 @@ fht_table<K, V, Returner, Hasher, Allocator>::resize() {
     }
 }
 
+
 // Resize Standard
 template<typename K,
          typename V,
@@ -798,7 +809,7 @@ fht_table<K, V, Returner, Hasher, Allocator>::resize() {
 
     // iterate through all chunks and re-place nodes
     for (uint32_t i = 0; i < _num_chunks; i++) {
-
+        uint64_t slot_idx = 0;
 
         const fht_chunk<K, V> * const old_chunk = old_chunks + i;
 
@@ -806,22 +817,23 @@ fht_table<K, V, Returner, Hasher, Allocator>::resize() {
         // function.
 #ifdef BVEC_ITER
         uint64_t taken_slots, j;
-        uint32_t slot_idx =
-            old_chunk->get_empty_or_del(1) | old_chunk->get_empty_or_del(0);
+
+        const uint32_t temp_taken_slots =
+            (old_chunk->get_empty_or_del(1) << 16) |
+            (old_chunk->get_empty_or_del(0) & 0xffff);
+
         taken_slots = (old_chunk->get_empty_or_del(3) << 16) |
-                      old_chunk->get_empty_or_del(2);
+                      (old_chunk->get_empty_or_del(2) & 0xffff);
 
 
-        taken_slots = (taken_slots << 32) | slot_idx;
+        taken_slots = (taken_slots << 32) | temp_taken_slots;
         taken_slots = ~taken_slots;
 
-        slot_idx = 0;
         while (taken_slots) {
             __asm__("tzcnt %1, %0" : "=r"((j)) : "rm"((taken_slots)));
             taken_slots ^= ((1UL) << j);
 
 #else
-        uint32_t slot_idx = 0;
         for (uint32_t j = 0; j < FHT_NODES_PER_CACHE_LINE; j++) {
 
             // if node is invalid or deleted skip it
