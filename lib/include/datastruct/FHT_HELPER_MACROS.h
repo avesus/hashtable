@@ -21,7 +21,7 @@
 // Tag Fields
 #include <stdint.h>
 static const int8_t INVALID_MASK = (0x80);
-static const int8_t DELETE_MASK  = (0xFE);
+static const int8_t DELETE_MASK  = (0xFF);
 static const int8_t CONTENT_MASK = (0x7F);
 
 #define IS_INVALID(tag)  (((tag)) == INVALID_MASK)
