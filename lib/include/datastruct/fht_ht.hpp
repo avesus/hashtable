@@ -88,8 +88,9 @@ const uint32_t FHT_HASH_SEED = 0;
 #define FHT_MM_SET(X)     _mm_set1_epi8(X)
 #define FHT_MM_MASK(X, Y) _mm_movemask_epi8(_mm_cmpeq_epi8(X, Y))
 #define FHT_MM_EMPTY(X)   _mm_movemask_epi8(_mm_sign_epi8(X, X))
-
 #define FHT_MM_EMPTY_OR_DEL(X) _mm_movemask_epi8(X)
+
+static const __m256i reset_vec = _mm256_set1_epi8(0x80);
 
 
 static const uint32_t FHT_MM_LINE = FHT_NODES_PER_CACHE_LINE / sizeof(__m128i);
@@ -634,19 +635,19 @@ fht_table<K, V, Returner, Hasher, Allocator>::resize() {
         // to reset deleted
         __m256i * const set_tags_vec = (__m256i * const)(old_chunk->tags_vec);
 
-        set_tags_vec[0] = _mm256_blendv_epi8(set_tags_vec[0],
+        /*        set_tags_vec[0] = _mm256_blendv_epi8(set_tags_vec[0],
                                              _mm256_set1_epi8(0x80),
                                              set_tags_vec[0]);
         set_tags_vec[1] = _mm256_blendv_epi8(set_tags_vec[1],
                                              _mm256_set1_epi8(0x80),
-                                             set_tags_vec[1]);
+                                             set_tags_vec[1]); */
 
-        // for some reason this is slower??
-        /*        set_tags_vec[0] =
-            _mm256_min_epu8(set_tags_vec[0], _mm256_set1_epi8(0x80));
+        //I think this save a cycle. Far from critical path but still...
+        set_tags_vec[0] =
+            _mm256_min_epu8(set_tags_vec[0], reset_vec);
 
         set_tags_vec[1] =
-            _mm256_min_epu8(set_tags_vec[1], _mm256_set1_epi8(0x80));*/
+            _mm256_min_epu8(set_tags_vec[1], reset_vec);
 
         uint64_t j,
             iter_mask =
