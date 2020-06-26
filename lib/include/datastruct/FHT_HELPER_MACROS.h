@@ -21,7 +21,7 @@
 // Tag Fields
 #include <stdint.h>
 static const int8_t INVALID_MASK = (0x80);
-static const int8_t DELETE_MASK  = (0xFF);
+static const int8_t DELETE_MASK  = (0xC0);
 static const int8_t CONTENT_MASK = (0x7F);
 
 #define IS_INVALID(tag)  (((tag)) == INVALID_MASK)
@@ -30,10 +30,8 @@ static const int8_t CONTENT_MASK = (0x7F);
 #define IS_DELETED(tag)  (((tag)) == DELETE_MASK)
 #define SET_DELETED(tag) ((tag) = DELETE_MASK)
 
-#define IS_PLACEABLE(tag) ((tag) >= 0)
-
 // skip in resize if either not valid or deleted
-#define RESIZE_SKIP(tag) ((tag) < 0)
+#define RESIZE_SKIP(tag) ((tag) & 0x80)
 
 #define TAG_BITS 7
 //////////////////////////////////////////////////////////////////////

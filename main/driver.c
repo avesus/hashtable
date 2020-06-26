@@ -276,14 +276,14 @@ main(int argc, char ** argv) {
         fht_table<std::string, std::string> table(1 << init_size);
 #endif
         // run perf test
-#ifdef INeT_TEST
+#ifdef INET_TEST
         for (uint32_t i = 0; i < FHT_TEST_SIZE; i++) {
             table.add((test_nodes + i)->key, (test_nodes + i)->val);
         }
         for (uint32_t i = 0; i < FHT_TEST_SIZE; i++) {
             table.remove((test_nodes + i)->key);
         }
-        #endif
+#endif
         clock_gettime(CLOCK_MONOTONIC, &start);
         uint32_t      counter = 0;
         uint32_t      ret     = 0;

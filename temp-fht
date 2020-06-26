@@ -82,13 +82,15 @@ const uint32_t FHT_HASH_SEED = 0;
 #include <type_traits>
 
 
-#define FHT_MM_SET(X)          _mm_set1_epi8(X)
-#define FHT_MM_MASK(X, Y)      _mm_movemask_epi8(_mm_cmpeq_epi8(X, Y))
-#define FHT_MM_EMPTY(X)        _mm_movemask_epi8(_mm_sign_epi8(X, X))
-#define FHT_MM_EMPTY_OR_DEL(X) _mm_movemask_epi8(X)
+#define FHT_MM_SET(X)     _mm_set1_epi8(X)
+#define FHT_MM_MASK(X, Y) _mm_movemask_epi8(_mm_cmpeq_epi8(X, Y))
+#define FHT_MM_EMPTY(X)   _mm_movemask_epi8(X)
+#define FHT_MM_DEL(X)     _mm_movemask_epi8(_mm_cmpeq_epi8(X, FHT_DEL_VEC))
 
+#define FHT_MM_EMPTY_OR_DEL(X) _mm_movemask_epi8(_mm_cmpgt_epi8(X, _mm_set1_epi8(0x3F)))
 
-static const __m256i FHT_RESET_VEC = _mm256_set1_epi8(0x80);
+static const __m256i FHT_RESET_VEC = _mm256_set1_epi8(0x3F);
+static const __m128i FHT_DEL_VEC   = _mm_set1_epi8(DELETE_MASK);
 
 
 static const uint32_t FHT_MM_LINE = FHT_NODES_PER_CACHE_LINE / sizeof(__m128i);
@@ -259,7 +261,7 @@ struct fht_chunk {
 
     inline constexpr uint32_t
     get_del(const uint32_t idx) {
-        return FHT_MM_EMPTY_OR_DEL(this->tags_vec[idx]);
+        return FHT_MM_DEL(this->tags_vec[idx]);
     }
 
     inline constexpr uint32_t
@@ -555,8 +557,6 @@ fht_table<K, V, Returner, Hasher, Allocator>::fht_table(
     this->chunks =
         this->alloc_mmap.init_mem((_init_size / FHT_NODES_PER_CACHE_LINE));
 
-    // might be faster with _m512 but this is a mile from any critical path and
-    // makes less portable
     const __m128i inv_match = FHT_MM_SET(INVALID_MASK);
     for (uint32_t i = 0; i < (_init_size / FHT_NODES_PER_CACHE_LINE); i++) {
         for (uint32_t j = 0; j < FHT_MM_LINE; j++) {
@@ -639,17 +639,17 @@ fht_table<K, V, Returner, Hasher, Allocator>::resize() {
         // to reset deleted
         __m256i * const set_tags_vec = (__m256i * const)(old_chunk->tags_vec);
 
-        /*        set_tags_vec[0] = _mm256_blendv_epi8(set_tags_vec[0],
+        set_tags_vec[0] = _mm256_blendv_epi8(set_tags_vec[0],
                                              _mm256_set1_epi8(0x80),
-                                             set_tags_vec[0]);
+                                             _mm256_cmpgt_epi8(set_tags_vec[0], FHT_RESET_VEC));
         set_tags_vec[1] = _mm256_blendv_epi8(set_tags_vec[1],
                                              _mm256_set1_epi8(0x80),
-                                             set_tags_vec[1]); */
+                                             _mm256_cmpgt_epi8(set_tags_vec[1], FHT_RESET_VEC));
 
         // I think this save a cycle. Far from critical path but still...
-        set_tags_vec[0] = _mm256_min_epu8(set_tags_vec[0], FHT_RESET_VEC);
+        //        set_tags_vec[0] = _mm256_min_epu8(set_tags_vec[0], FHT_RESET_VEC);
 
-        set_tags_vec[1] = _mm256_min_epu8(set_tags_vec[1], FHT_RESET_VEC);
+        //        set_tags_vec[1] = _mm256_min_epu8(set_tags_vec[1], FHT_RESET_VEC);
 
         uint64_t j,
             iter_mask =
@@ -712,69 +712,67 @@ fht_table<K, V, Returner, Hasher, Allocator>::resize() {
 
         uint64_t to_move_idx;
         uint32_t to_place_idx;
-
         while (to_move) {
-            uint32_t j;
-            __asm__("tzcnt %1, %0" : "=r"((j)) : "rm"((to_move)));
+            for (uint32_t j = 0; j < FHT_MM_LINE; j++) {
+                if (to_move & (1 << j)) {
+                    // has space and has items to move to it
+                    while (old_start_pos[j] != 0xffff && old_start_to_move[j]) {
 
-            // has space and has items to move to it
-            while (old_start_pos[j] != 0xffff && old_start_to_move[j]) {
+                        __asm__("tzcnt %1, %0"
+                                : "=r"((to_move_idx))
+                                : "rm"((old_start_to_move[j])));
+                        old_start_to_move[j] ^= ((1UL) << to_move_idx);
 
-                __asm__("tzcnt %1, %0"
-                        : "=r"((to_move_idx))
-                        : "rm"((old_start_to_move[j])));
+                        __asm__("tzcnt %1, %0"
+                                : "=r"((to_place_idx))
+                                : "rm"((~old_start_pos[j])));
 
-                __asm__("tzcnt %1, %0"
-                        : "=r"((to_place_idx))
-                        : "rm"((~old_start_pos[j])));
+                        old_chunk->set_key_val_tag(
+                            FHT_MM_IDX_MULT * j + to_place_idx,
+                            old_chunk->get_key_n(to_move_idx),
+                            old_chunk->get_val_n(to_move_idx),
+                            old_chunk->get_tag_n(to_move_idx));
 
-                old_start_to_move[j] ^= ((1UL) << to_move_idx);
-                old_chunk->set_key_val_tag(FHT_MM_IDX_MULT * j + to_place_idx,
-                                           old_chunk->get_key_n(to_move_idx),
-                                           old_chunk->get_val_n(to_move_idx),
-                                           old_chunk->get_tag_n(to_move_idx));
+                        old_chunk->set_tag_n(to_move_idx, INVALID_MASK);
 
-                old_chunk->set_tag_n(to_move_idx, INVALID_MASK);
+                        old_start_good_slots += (1 << (8 * j));
+                        old_start_pos[j] |= (1 << to_place_idx);
+                        old_start_pos[to_move_idx / FHT_MM_IDX_MULT] ^=
+                            (1 << (to_move_idx & FHT_MM_IDX_MASK));
+                    }
+                    if (old_start_to_move[j] &&
+                        ((old_start_good_slots >> (8 * j)) & 0xff) ==
+                            FHT_MM_IDX_MULT) {
 
-                old_start_good_slots += (1 << (8 * j));
-                old_start_pos[j] |= (1 << to_place_idx);
-                old_start_pos[to_move_idx / FHT_MM_IDX_MULT] ^=
-                    (1 << (to_move_idx & FHT_MM_IDX_MASK));
-            }
-            // j is full of items that belong but more entries wants to be in j
-            if (__builtin_expect(
-                    old_start_to_move[j] && ((old_start_good_slots >> (8 * j)) &
-                                             0xff) == FHT_MM_IDX_MULT,
-                    0)) {
-
-                // move the indexes that this need to be placed (i.e if
-                // any of the nodes that needed to be moved to j (now
-                // j + 1) are already in j + 1 we can remove them from
-                // to_move list
-                old_start_to_move[(j + 1) & FHT_MM_LINE_MASK] |=
-                    (~((0xffffUL)
-                       << (FHT_MM_IDX_MULT * ((j + 1) & FHT_MM_LINE_MASK)))) &
-                    old_start_to_move[j];
+                        // move the indexes that this need to be placed (i.e if
+                        // any of the nodes that needed to be moved to j (now
+                        // j + 1) are already in j + 1 we can remove them from
+                        // to_move list
+                        old_start_to_move[(j + 1) & FHT_MM_LINE_MASK] |=
+                            (~((0xffffUL) << (FHT_MM_IDX_MULT *
+                                              ((j + 1) & FHT_MM_LINE_MASK)))) &
+                            old_start_to_move[j];
 
 
-                const uint32_t new_mask =
-                    (old_start_to_move[j] >>
-                     (FHT_MM_IDX_MULT * ((j + 1) & FHT_MM_LINE_MASK))) &
-                    0xffff;
+                        const uint32_t new_mask =
+                            (old_start_to_move[j] >>
+                             (FHT_MM_IDX_MULT * ((j + 1) & FHT_MM_LINE_MASK))) &
+                            0xffff;
 
-                old_start_pos[(j + 1) & FHT_MM_LINE_MASK] |= new_mask;
-                old_start_good_slots += bitcount_32(new_mask)
-                                        << (8 * ((j + 1) & FHT_MM_LINE_MASK));
+                        old_start_pos[(j + 1) & FHT_MM_LINE_MASK] |= new_mask;
+                        old_start_good_slots +=
+                            bitcount_32(new_mask)
+                            << (8 * ((j + 1) & FHT_MM_LINE_MASK));
 
-                // if j + 1 was done set it back
-                if (old_start_to_move[(j + 1) & FHT_MM_LINE_MASK]) {
-                    to_move |= (1 << ((j + 1) & FHT_MM_LINE_MASK));
+                        if (old_start_to_move[(j + 1) & FHT_MM_LINE_MASK]) {
+                            to_move |= (1 << ((j + 1) & FHT_MM_LINE_MASK));
+                        }
+                        old_start_to_move[j] = 0;
+                    }
+                    if (!old_start_to_move[j]) {
+                        to_move ^= (1 << j);
+                    }
                 }
-                old_start_to_move[j] = 0;
-                to_move ^= (1 << j);
-            }
-            else if (__builtin_expect(!old_start_to_move[j], 1)) {
-                to_move ^= (1 << j);
             }
         }
     }
@@ -938,40 +936,36 @@ fht_table<K, V, Returner, Hasher, Allocator>::add(key_pass_t new_key,
 
             if (__builtin_expect((chunk->compare_key_n(true_idx, new_key)),
                                  1)) {
-
                 return FHT_NOT_ADDED;
             }
 
             slot_mask ^= (1 << idx);
         }
 
-        // we always go here 1st loop (where most add calls find a slot) and if
-        // no deleted elements alwys go here as well
-        if (__builtin_expect(del_idx & FHT_NODES_PER_CACHE_LINE, 1)) {
-            const uint32_t _slot_mask = chunk->get_empty_or_del(outer_idx);
-            if (__builtin_expect(_slot_mask, 1)) {
-                __asm__("tzcnt %1, %0" : "=r"((idx)) : "rm"((_slot_mask)));
+
+        if (del_idx == FHT_NODES_PER_CACHE_LINE) {
+            slot_mask = chunk->get_del(outer_idx);
+            if (slot_mask) {
+                __asm__("tzcnt %1, %0" : "=r"((idx)) : "rm"((slot_mask)));
                 const uint32_t true_idx = FHT_MM_IDX_MULT * outer_idx + idx;
-
-                // some tunable param here would be useful
-                if (chunk->is_deleted_n(true_idx)) {
-                    // even though this adds an operation it avoids worst case
-                    // where alot of deleted items = unnecissary iterations. 2
-                    // iterations approx = this cost.
-                    if (chunk->get_empty(outer_idx)) {
-                        chunk->set_key_val_tag(true_idx, new_key, new_val, tag);
-                        return FHT_ADDED;
-                    }
-
-                    del_idx = true_idx;
+                if (chunk->get_empty(outer_idx)) {
+                    chunk->set_key_val_tag(true_idx, new_key, new_val, tag);
+                    return FHT_ADDED;
                 }
-                else {
+
+                del_idx = true_idx;
+            }
+            else {
+                slot_mask = chunk->get_empty(outer_idx);
+                if (__builtin_expect(slot_mask, 1)) {
+                    __asm__("tzcnt %1, %0" : "=r"((idx)) : "rm"((slot_mask)));
+                const uint32_t true_idx = FHT_MM_IDX_MULT * outer_idx + idx;
                     chunk->set_key_val_tag(true_idx, new_key, new_val, tag);
                     return FHT_ADDED;
                 }
             }
         }
-        else if (chunk->get_empty(outer_idx)) {
+        else if (__builtin_expect(chunk->get_empty(outer_idx), 1)) {
             chunk->set_key_val_tag(del_idx, new_key, new_val, tag);
             return FHT_ADDED;
         }
@@ -991,11 +985,11 @@ fht_table<K, V, Returner, Hasher, Allocator>::add(key_pass_t new_key,
 
     // after resize add without duplication check
     for (uint32_t j = 0; j < FHT_MM_LINE; j++) {
-        const uint32_t outer_idx  = (j + start_idx) & FHT_MM_LINE_MASK;
-        const uint32_t _slot_mask = new_chunk->get_empty(outer_idx);
+        const uint32_t outer_idx = (j + start_idx) & FHT_MM_LINE_MASK;
 
-        if (__builtin_expect(_slot_mask, 1)) {
-            __asm__("tzcnt %1, %0" : "=r"((idx)) : "rm"((_slot_mask)));
+        slot_mask = new_chunk->get_empty(outer_idx);
+        if (__builtin_expect(slot_mask, 1)) {
+            __asm__("tzcnt %1, %0" : "=r"((idx)) : "rm"((slot_mask)));
 
             new_chunk->set_key_val_tag(FHT_MM_IDX_MULT * outer_idx + idx,
                                        new_key,
@@ -1862,5 +1856,52 @@ struct DEFAULT_MMAP_ALLOC {
 #include "UNDEF_FHT_HELPER_MACROS.h"
 #include "UNDEF_FHT_SPECIAL_TYPE_MACROS.h"
 //////////////////////////////////////////////////////////////////////
+
+#endif
+
+
+    #ifndef _FHT_HELPER_MACROS_H_
+#define _FHT_HELPER_MACROS_H_
+
+//////////////////////////////////////////////////////////////////////
+// Constants
+#define FHT_NODES_PER_CACHE_LINE     L1_CACHE_LINE_SIZE
+#define FHT_LOG_NODES_PER_CACHE_LINE L1_LOG_CACHE_LINE_SIZE
+#define FHT_CACHE_IDX_MASK           (FHT_NODES_PER_CACHE_LINE - 1)
+#define FHT_CACHE_ALIGN_MASK         (~(FHT_CACHE_IDX_MASK))
+//////////////////////////////////////////////////////////////////////
+// Helpers
+// mask of n bits
+#define TO_MASK(n) ((1 << (n)) - 1)
+
+// for extracting a bit
+#define GET_NTH_BIT(X, n)                                                      \
+    ((((X) >> (TAG_BITS - L1_LOG_CACHE_LINE_SIZE)) >> ((n))) & 0x1)
+//////////////////////////////////////////////////////////////////////
+
+//////////////////////////////////////////////////////////////////////
+// Tag Fields
+#include <stdint.h>
+static const int8_t INVALID_MASK = (0x80);
+static const int8_t DELETE_MASK  = (0x70);
+static const int8_t CONTENT_MASK = (0x3F);
+
+#define IS_INVALID(tag)  (((tag)) == INVALID_MASK)
+#define SET_INVALID(tag) ((tag) = INVALID_MASK)
+
+#define IS_DELETED(tag)  (((tag)) == DELETE_MASK)
+#define SET_DELETED(tag) ((tag) = DELETE_MASK)
+
+// skip in resize if either not valid or deleted
+#define RESIZE_SKIP(tag) ((tag) & (INVALID_MASK & DELETE_MASK))
+
+#define TAG_BITS 6
+//////////////////////////////////////////////////////////////////////
+// Calculating Tag and Start Idx and chunk from a raw hash
+#define HASH_TO_IDX(hash_val, tbl_log)                                         \
+    ((((hash_val) >> 1) & TO_MASK(tbl_log)) / FHT_NODES_PER_CACHE_LINE)
+#define GEN_TAG(hash_val)       ((hash_val)&CONTENT_MASK)
+#define GEN_START_IDX(hash_val) ((hash_val) >> (8 * sizeof(hash_type_t) - 2))
+
 
 #endif
