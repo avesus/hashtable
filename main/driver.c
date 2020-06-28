@@ -261,6 +261,7 @@ main(int argc, char ** argv) {
 
 #endif
     if (which_table == OUR_TABLE) {
+        //        fht_table<uint32_t, uint32_t,default, DEFAULT_MMAP_ALLOC<uint32_t, uint32_t> t2;
 #ifdef INT_TEST
 
         fht_table<uint32_t, uint32_t>
@@ -268,8 +269,7 @@ main(int argc, char ** argv) {
             table(1 << init_size);
 
 #elif defined INT_STR_TEST
-        fht_table<uint32_t, std::string> table(
-            1 << init_size);
+        fht_table<uint32_t, std::string> table(1 << init_size);
 #elif defined TEST_TEST
         fht_table<test_type, test_type> table(1 << init_size);
 #else
@@ -291,7 +291,8 @@ main(int argc, char ** argv) {
         std::string * str_ret;
         for (uint32_t i = 0; i < FHT_TEST_SIZE; i++) {
 #ifdef INT_TEST
-            volatile auto sink = table.add((test_nodes + i)->key, (test_nodes + i)->val);
+            volatile auto sink =
+                table.add((test_nodes + i)->key, (test_nodes + i)->val);
 #elif defined INT_STR_TEST
             volatile auto sink = table.add(
                 (test_nodes + i)->key,
@@ -301,7 +302,8 @@ main(int argc, char ** argv) {
             volatile auto sink = table.add(test_type_key[i], test_type_val[i]);
 
 #else
-            volatile auto sink = table.add(test_string_node[i], test_string_node_val[i]);
+            volatile auto sink =
+                table.add(test_string_node[i], test_string_node_val[i]);
 #endif
             for (uint32_t j = i * Q_PER_INS; j < (i + 1) * Q_PER_INS; j++) {
 #ifdef INT_TEST

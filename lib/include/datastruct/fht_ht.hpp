@@ -29,6 +29,8 @@ const uint64_t FHT_ERASED     = 1;
 
 
 // tunable
+
+// whether keys/vals passed in can be constructed with std::move
 //#define DESTROYABLE_INSERT
 #ifdef DESTROYABLE_INSERT
 #define SRC_WRAPPER(X) std::move(X)
@@ -38,20 +40,33 @@ const uint64_t FHT_ERASED     = 1;
 
 #define NEW(type, dst, src) (new ((void *)(&(dst))) type(src))
 
+// basically its a speedup to prefetch keys for larger node types and slowdown
+// for smaller key types. Generally 8 has worked well go me but set to w.e
+#define PREFETCH_BOUND 8
+template<typename K>
+static constexpr
+    typename std::enable_if<(sizeof(K) > PREFETCH_BOUND), void>::type
+    __attribute__((always_inline)) prefetch(const void * const ptr) {
+    __builtin_prefetch(ptr);
+}
+
+template<typename K>
+static constexpr
+    typename std::enable_if<!(sizeof(K) > PREFETCH_BOUND), void>::type
+    __attribute__((always_inline)) prefetch(const void * const ptr) {}
+
 
 // when to change pass by from actual value to reference
 #define FHT_PASS_BY_VAL_THRESH 8
 
-// for optimized layout of node struct. Keys with size <= get different layout
-// than bigger key vals
-#define FHT_SEPERATE_THRESH 8
-
-// these will use the "optimized" find/remove. Basically I find this is
-// important with string keys and thats about all. Seperate types with ,
-// worth noting generally insert heavy does better with special.
+// special types have keys / values stored in seperate memory. This will
+// increase delete/query performance (at a slight cost to insert). Importantly
+// it will change the return of the iterators operator* and operator-> to return
+// fht_special_pair. This can be used to access key/value but only with
+// get<uint32_t>(). first/second field DO NOT EXIST in fht_special_pair
 struct _fht_empty_t {};
-#define FHT_SPECIAL_TYPES std::string, _fht_empty_t
-
+#define FHT_SPECIAL_TYPES _fht_empty_t, uint32_t
+//////////////////////////////////////////////////////////////////////
 
 // tunable but less important
 
@@ -83,7 +98,8 @@ const uint32_t FHT_HASH_SEED = 0;
 #include <string>
 #include <type_traits>
 
-
+//////////////////////////////////////////////////////////////////////
+//SSE stuff
 #define FHT_MM_SET(X)          _mm_set1_epi8(X)
 #define FHT_MM_MASK(X, Y)      _mm_movemask_epi8(_mm_cmpeq_epi8(X, Y))
 #define FHT_MM_EMPTY(X)        _mm_movemask_epi8(_mm_sign_epi8(X, X))
@@ -98,6 +114,7 @@ static const uint32_t FHT_MM_LINE_MASK = FHT_MM_LINE - 1;
 
 static const uint32_t FHT_MM_IDX_MULT = FHT_NODES_PER_CACHE_LINE / FHT_MM_LINE;
 static const uint32_t FHT_MM_IDX_MASK = FHT_MM_IDX_MULT - 1;
+//////////////////////////////////////////////////////////////////////
 
 
 //////////////////////////////////////////////////////////////////////
@@ -123,8 +140,8 @@ struct DEFAULT_HASH_64;
 // for correctness) and 2) returns at the very least cache line aligned memory
 // (this is necessary for performance)
 // Must define:
-// fht_chunk<K, V> * const init_mem(const size_t)
-// deinit_mem(fht_chunk<K, V> * const, const size_t size)
+// fht_chunk<K, V> * const allocate(const size_t)
+// deallocate(fht_chunk<K, V> * const, const size_t size)
 
 // If table type (value or key) requires a constructor (i.e most non primitive
 // classes) must also define:
@@ -225,15 +242,13 @@ struct fht_chunk {
         typename std::conditional<(std::is_arithmetic<T>::value ||
                                    std::is_pointer<T>::value),
                                   const T,
-                                  T const &>::type;
+                                  const T &>::type;
 
     // determine node type based on K/V
     template<typename _K = K, typename _V = V>
-    using _node_t =
-        typename std::conditional<(FHT_NOT_SPECIAL(FHT_SPECIAL_TYPES) &&
-                                   sizeof(_K) <= FHT_SEPERATE_THRESH),
-                                  fht_seperate_kv<_K, _V>,
-                                  fht_combined_kv<_K, _V>>::type;
+    using _node_t = typename std::conditional<FHT_SPECIAL_CONDITIONAL,
+                                              fht_seperate_kv<_K, _V>,
+                                              fht_combined_kv<_K, _V>>::type;
 
 
     // typedefs to fht_table can access these variables
@@ -290,21 +305,16 @@ struct fht_chunk {
 
     // overloaded key/value helpers
     //////////////////////////////////////////////////////////////////////
-    // <= FHT_SEPERATE_THRESH byte value methods
     template<typename _K = K, typename _V = V>
     inline constexpr
-        typename std::enable_if<(FHT_NOT_SPECIAL(FHT_SPECIAL_TYPES) &&
-                                 sizeof(_K) <= FHT_SEPERATE_THRESH),
-                                key_pass_t>::type __attribute__((always_inline))
-        get_key_n(const uint32_t n) const {
+        typename std::enable_if<FHT_SPECIAL_CONDITIONAL, key_pass_t>::type
+        __attribute__((always_inline)) get_key_n(const uint32_t n) const {
         return this->nodes.keys[n];
     }
 
     template<typename _K = K, typename _V = V>
     inline constexpr
-        typename std::enable_if<(FHT_NOT_SPECIAL(FHT_SPECIAL_TYPES) &&
-                                 sizeof(_K) <= FHT_SEPERATE_THRESH),
-                                const uint32_t>::type
+        typename std::enable_if<FHT_SPECIAL_CONDITIONAL, const uint32_t>::type
         __attribute__((always_inline))
         compare_key_n(const uint32_t n, key_pass_t other_key) const {
         return this->nodes.keys[n] == other_key;
@@ -312,35 +322,28 @@ struct fht_chunk {
 
     template<typename _K = K, typename _V = V>
     inline constexpr
-        typename std::enable_if<(FHT_NOT_SPECIAL(FHT_SPECIAL_TYPES) &&
-                                 sizeof(_K) <= FHT_SEPERATE_THRESH),
-                                val_pass_t>::type __attribute__((always_inline))
-        get_val_n(const uint32_t n) const {
+        typename std::enable_if<FHT_SPECIAL_CONDITIONAL, val_pass_t>::type
+        __attribute__((always_inline)) get_val_n(const uint32_t n) const {
         return this->nodes.vals[n];
     }
 
 
     template<typename _K = K, typename _V = V>
     inline constexpr
-        typename std::enable_if<(FHT_NOT_SPECIAL(FHT_SPECIAL_TYPES) &&
-                                 sizeof(_K) <= FHT_SEPERATE_THRESH),
-                                const K * const>::type
+        typename std::enable_if<FHT_SPECIAL_CONDITIONAL, const K * const>::type
         __attribute__((always_inline)) get_key_n_ptr(const uint32_t n) const {
         return (const K * const)(&(this->nodes.keys[n]));
     }
 
     template<typename _K = K, typename _V = V>
     inline constexpr
-        typename std::enable_if<(FHT_NOT_SPECIAL(FHT_SPECIAL_TYPES) &&
-                                 sizeof(_K) <= FHT_SEPERATE_THRESH),
-                                V * const>::type __attribute__((always_inline))
-        get_val_n_ptr(const uint32_t n) const {
+        typename std::enable_if<FHT_SPECIAL_CONDITIONAL, V * const>::type
+        __attribute__((always_inline)) get_val_n_ptr(const uint32_t n) const {
         return (V * const)(&(this->nodes.vals[n]));
     }
 
     template<typename _K = K, typename _V = V>
-    inline typename std::enable_if<(FHT_NOT_SPECIAL(FHT_SPECIAL_TYPES) &&
-                                    sizeof(_K) <= FHT_SEPERATE_THRESH &&
+    inline typename std::enable_if<(FHT_SPECIAL_CONDITIONAL &&
                                     sizeof(_V) <= FHT_PASS_BY_VAL_THRESH),
                                    void>::type __attribute__((always_inline))
     set_key_val_tag(const uint32_t n,
@@ -355,8 +358,7 @@ struct fht_chunk {
 
 
     template<typename _K = K, typename _V = V, typename... Args>
-    inline typename std::enable_if<(FHT_NOT_SPECIAL(FHT_SPECIAL_TYPES) &&
-                                    sizeof(_K) <= FHT_SEPERATE_THRESH &&
+    inline typename std::enable_if<(FHT_SPECIAL_CONDITIONAL &&
                                     sizeof(_V) > FHT_PASS_BY_VAL_THRESH),
                                    void>::type __attribute__((always_inline))
     set_key_val_tag(const uint32_t n,
@@ -369,8 +371,7 @@ struct fht_chunk {
     }
 
     template<typename _K = K, typename _V = V>
-    inline typename std::enable_if<(FHT_NOT_SPECIAL(FHT_SPECIAL_TYPES) &&
-                                    sizeof(_K) <= FHT_SEPERATE_THRESH &&
+    inline typename std::enable_if<(FHT_SPECIAL_CONDITIONAL &&
                                     sizeof(_V) > FHT_PASS_BY_VAL_THRESH),
                                    void>::type __attribute__((always_inline))
     set_key_val_tag(const uint32_t n,
@@ -383,8 +384,7 @@ struct fht_chunk {
     }
 
     template<typename _K = K, typename _V = V>
-    inline typename std::enable_if<(FHT_NOT_SPECIAL(FHT_SPECIAL_TYPES) &&
-                                    sizeof(_K) <= FHT_SEPERATE_THRESH &&
+    inline typename std::enable_if<(FHT_SPECIAL_CONDITIONAL &&
                                     sizeof(_V) > FHT_PASS_BY_VAL_THRESH),
                                    void>::type __attribute__((always_inline))
     set_key_val_tag(const uint32_t n,
@@ -398,21 +398,16 @@ struct fht_chunk {
 
 
     //////////////////////////////////////////////////////////////////////
-    // Non FHT_SEPERATE_THRESH byte value methods
     template<typename _K = K, typename _V = V>
     inline constexpr
-        typename std::enable_if<(FHT_IS_SPECIAL(FHT_SPECIAL_TYPES) ||
-                                 sizeof(_K) > FHT_SEPERATE_THRESH),
-                                key_pass_t>::type __attribute__((always_inline))
-        get_key_n(const uint32_t n) const {
+        typename std::enable_if<((!FHT_SPECIAL_CONDITIONAL)), key_pass_t>::type
+        __attribute__((always_inline)) get_key_n(const uint32_t n) const {
         return this->nodes.nodes[n].key;
     }
 
     template<typename _K = K, typename _V = V>
-    inline constexpr
-        typename std::enable_if<(FHT_IS_SPECIAL(FHT_SPECIAL_TYPES) ||
-                                 sizeof(_K) > FHT_SEPERATE_THRESH),
-                                const uint32_t>::type
+    inline constexpr typename std::enable_if<((!FHT_SPECIAL_CONDITIONAL)),
+                                             const uint32_t>::type
         __attribute__((always_inline))
         compare_key_n(const uint32_t n, key_pass_t other_key) const {
         return this->nodes.nodes[n].key == other_key;
@@ -421,36 +416,29 @@ struct fht_chunk {
 
     template<typename _K = K, typename _V = V>
     inline constexpr
-        typename std::enable_if<(FHT_IS_SPECIAL(FHT_SPECIAL_TYPES) ||
-                                 sizeof(_K) > FHT_SEPERATE_THRESH),
-                                val_pass_t>::type __attribute__((always_inline))
-        get_val_n(const uint32_t n) const {
+        typename std::enable_if<((!FHT_SPECIAL_CONDITIONAL)), val_pass_t>::type
+        __attribute__((always_inline)) get_val_n(const uint32_t n) const {
         return this->nodes.nodes[n].val;
     }
 
 
     template<typename _K = K, typename _V = V>
-    inline constexpr
-        typename std::enable_if<(FHT_IS_SPECIAL(FHT_SPECIAL_TYPES) ||
-                                 sizeof(_K) > FHT_SEPERATE_THRESH),
-                                const K * const>::type
+    inline constexpr typename std::enable_if<((!FHT_SPECIAL_CONDITIONAL)),
+                                             const K * const>::type
         __attribute__((always_inline)) get_key_n_ptr(const uint32_t n) const {
         return (const K * const)(&(this->nodes.nodes[n].key));
     }
 
     template<typename _K = K, typename _V = V>
     inline constexpr
-        typename std::enable_if<(FHT_IS_SPECIAL(FHT_SPECIAL_TYPES) ||
-                                 sizeof(_K) > FHT_SEPERATE_THRESH),
-                                V * const>::type __attribute__((always_inline))
-        get_val_n_ptr(const uint32_t n) const {
+        typename std::enable_if<((!FHT_SPECIAL_CONDITIONAL)), V * const>::type
+        __attribute__((always_inline)) get_val_n_ptr(const uint32_t n) const {
         return (V * const)(&(this->nodes.nodes[n].val));
     }
 
 
     template<typename _K = K, typename _V = V>
-    inline typename std::enable_if<((FHT_IS_SPECIAL(FHT_SPECIAL_TYPES) ||
-                                     sizeof(_K) > FHT_SEPERATE_THRESH) &&
+    inline typename std::enable_if<(((!FHT_SPECIAL_CONDITIONAL)) &&
                                     sizeof(_V) <= FHT_PASS_BY_VAL_THRESH),
                                    void>::type __attribute__((always_inline))
     set_key_val_tag(const uint32_t n,
@@ -463,8 +451,7 @@ struct fht_chunk {
     }
 
     template<typename _K = K, typename _V = V, typename... Args>
-    inline typename std::enable_if<((FHT_IS_SPECIAL(FHT_SPECIAL_TYPES) ||
-                                     sizeof(_K) > FHT_SEPERATE_THRESH) &&
+    inline typename std::enable_if<(((!FHT_SPECIAL_CONDITIONAL)) &&
                                     sizeof(_V) > FHT_PASS_BY_VAL_THRESH),
                                    void>::type __attribute__((always_inline))
     set_key_val_tag(const uint32_t n,
@@ -477,8 +464,7 @@ struct fht_chunk {
     }
 
     template<typename _K = K, typename _V = V>
-    inline typename std::enable_if<((FHT_IS_SPECIAL(FHT_SPECIAL_TYPES) ||
-                                     sizeof(_K) > FHT_SEPERATE_THRESH) &&
+    inline typename std::enable_if<(((!FHT_SPECIAL_CONDITIONAL)) &&
                                     sizeof(_V) > FHT_PASS_BY_VAL_THRESH),
                                    void>::type __attribute__((always_inline))
     set_key_val_tag(const uint32_t n,
@@ -492,8 +478,7 @@ struct fht_chunk {
     }
 
     template<typename _K = K, typename _V = V>
-    inline typename std::enable_if<((FHT_IS_SPECIAL(FHT_SPECIAL_TYPES) ||
-                                     sizeof(_K) > FHT_SEPERATE_THRESH) &&
+    inline typename std::enable_if<(((!FHT_SPECIAL_CONDITIONAL)) &&
                                     sizeof(_V) > FHT_PASS_BY_VAL_THRESH),
                                    void>::type __attribute__((always_inline))
     set_key_val_tag(const uint32_t n,
@@ -505,6 +490,138 @@ struct fht_chunk {
         NEW(V, this->nodes.nodes[n].val, SRC_WRAPPER(new_val));
     }
 };
+
+
+//////////////////////////////////////////////////////////////////////
+// "pair" for iterator return (to make it useful)
+// because memory layout does not support pair am implementing a but of the
+// functionality for sake of the iterator
+template<typename K, typename V>
+struct fht_special_pair {
+    const int8_t * const cur_tag;
+
+    fht_special_pair() {
+        fprintf(stderr, "This call should NEVER be constructed manually!\n");
+        assert(0);
+    }
+    ~fht_special_pair() {}
+
+    inline const K &
+    first() const {
+        const fht_chunk<K, V> * const cur_chunk =
+            (const fht_chunk<K, V> * const)(((uint64_t)(this->cur_tag)) &
+                                            (~(FHT_NODES_PER_CACHE_LINE - 1)));
+
+        return *(cur_chunk->get_key_n_ptr(((uint64_t)(this->cur_tag)) &
+                                          ((FHT_NODES_PER_CACHE_LINE - 1))));
+    }
+
+    inline V &
+    second() const {
+        const fht_chunk<K, V> * const cur_chunk =
+            (const fht_chunk<K, V> * const)(((uint64_t)(this->cur_tag)) &
+                                            (~(FHT_NODES_PER_CACHE_LINE - 1)));
+
+        return *(cur_chunk->get_val_n_ptr(((uint64_t)(this->cur_tag)) &
+                                          ((FHT_NODES_PER_CACHE_LINE - 1))));
+    }
+
+
+    template<uint32_t I>
+    inline constexpr typename std::enable_if<(I == 0), const K &>::type
+    get() const {
+        return this->first();
+    }
+
+    template<uint32_t I>
+    inline constexpr typename std::enable_if<(I == 1), V &>::type
+    get() const {
+        return this->second();
+    }
+
+    template<typename... Args>
+    inline constexpr void
+    set_val(Args &&... args) const {
+        const fht_chunk<K, V> * const cur_chunk =
+            (const fht_chunk<K, V> * const)(((uint64_t)(this->cur_tag)) &
+                                            (~(FHT_NODES_PER_CACHE_LINE - 1)));
+
+        NEW(V,
+            *(cur_chunk->get_val_n_ptr(((uint64_t)(this->cur_tag)) &
+                                       ((FHT_NODES_PER_CACHE_LINE - 1)))),
+            std::forward<Args>(args)...);
+    }
+
+
+    std::pair<K, V>
+    as_pair() {
+        return std::pair<K, V>(this->first(), this->second());
+    }
+
+    //////////////////////////////////////////////////////////////////////
+    // == operators with std::pair<K, V>
+    inline friend bool
+    operator==(const fht_special_pair<K, V> & fht_a, std::pair<K, V> && std_b) {
+        return std_b.first == fht_a.first() && std_b.second == fht_a.second();
+    }
+
+    inline friend bool
+    operator==(const fht_special_pair<K, V> & fht_a,
+               const std::pair<K, V> &        std_b) {
+        return std_b.first == fht_a.first() && std_b.second == fht_a.second();
+    }
+
+    inline friend bool
+    operator==(std::pair<K, V> && std_b, const fht_special_pair<K, V> & fht_a) {
+        return std_b.first == fht_a.first() && std_b.second == fht_a.second();
+    }
+
+    inline friend bool
+    operator==(const std::pair<K, V> &        std_b,
+               const fht_special_pair<K, V> & fht_a) {
+        return std_b.first == fht_a.first() && std_b.second == fht_a.second();
+    }
+    //////////////////////////////////////////////////////////////////////
+    // != operators with std::pair<K, V>
+
+    inline friend bool
+    operator!=(const fht_special_pair<K, V> & fht_a, std::pair<K, V> && std_b) {
+        return std_b.first != fht_a.first() || std_b.second != fht_a.second();
+    }
+
+    inline friend bool
+    operator!=(const fht_special_pair<K, V> & fht_a,
+               const std::pair<K, V> &        std_b) {
+        return std_b.first != fht_a.first() || std_b.second != fht_a.second();
+    }
+
+    inline friend bool
+    operator!=(std::pair<K, V> && std_b, const fht_special_pair<K, V> & fht_a) {
+        return std_b.first != fht_a.first() || std_b.second != fht_a.second();
+    }
+
+    inline friend bool
+    operator!=(const std::pair<K, V> &        std_b,
+               const fht_special_pair<K, V> & fht_a) {
+        return std_b.first != fht_a.first() || std_b.second != fht_a.second();
+    }
+
+    inline friend bool
+    operator==(const fht_special_pair<K, V> & fht_a,
+               const fht_special_pair<K, V> & fht_b) {
+        return fht_b.first() == fht_a.first() &&
+               fht_b.second() == fht_a.second();
+    }
+
+    inline friend bool
+    operator!=(const fht_special_pair<K, V> & fht_a,
+               const fht_special_pair<K, V> & fht_b) {
+        return fht_b.first() != fht_a.first() ||
+               fht_b.second() != fht_a.second();
+    }
+};
+
+
 //////////////////////////////////////////////////////////////////////
 // Table class
 template<typename K,
@@ -516,6 +633,7 @@ struct fht_table {
 
     // log of table size
     uint32_t log_incr;
+    uint32_t npairs;
 
     // chunk array
     fht_chunk<K, V> * chunks;
@@ -523,6 +641,26 @@ struct fht_table {
     // helper classes
     Hasher    hash;
     Allocator alloc_mmap;
+
+    //////////////////////////////////////////////////////////////////////
+    template<typename _K = K, typename _Hasher = Hasher>
+    using _hash_type_t = typename std::result_of<_Hasher(K)>::type;
+    typedef _hash_type_t<K, Hasher> hash_type_t;
+
+    using key_pass_t = typename fht_chunk<K, V>::key_pass_t;
+    using val_pass_t = typename fht_chunk<K, V>::val_pass_t;
+
+    template<typename fht_it_pair>
+    struct fht_iterator_t;
+    template<typename _K = K, typename _V = V>
+    using _fht_iterator = typename std::conditional<
+        (!FHT_SPECIAL_CONDITIONAL),
+        fht_iterator_t<std::pair<_K, _V>>,
+        fht_iterator_t<fht_special_pair<_K, _V>>>::type;
+
+    typedef _fht_iterator<K, V> fht_iterator;
+    //////////////////////////////////////////////////////////////////////
+
 
     //////////////////////////////////////////////////////////////////////
     // very basic info
@@ -576,13 +714,6 @@ struct fht_table {
         void>::type
     resize();
 
-    template<typename _K = K, typename _Hasher = Hasher>
-    using _hash_type_t = typename std::result_of<_Hasher(K)>::type;
-    typedef _hash_type_t<K, Hasher> hash_type_t;
-
-    using key_pass_t = typename fht_chunk<K, V>::key_pass_t;
-    using val_pass_t = typename fht_chunk<K, V>::val_pass_t;
-    struct fht_iterator;
 
     fht_table(const uint64_t init_size);
     // defaults to FHT_DEFAULT_INIT_SIZE (really???)
@@ -594,7 +725,7 @@ struct fht_table {
 
     // slightly different logic than emplace...
     template<typename... Args>
-    std::pair<fht_iterator, bool>
+    inline std::pair<fht_iterator, bool>
     insert_or_assign(key_pass_t new_key, Args &&... args) {
         const uint64_t res =
             (const uint64_t)add(new_key, std::forward<Args>(args)...);
@@ -609,20 +740,20 @@ struct fht_table {
     }
 
     template<typename... Args>
-    std::pair<fht_iterator, bool>
+    inline constexpr std::pair<fht_iterator, bool>
     insert(key_pass_t new_key, Args &&... args) {
         return emplace(new_key, std::forward<Args>(args)...);
     }
 
     //////////////////////////////////////////////////////////////////////
     // Its probably a bad idea to use any other inserts below
-    std::pair<fht_iterator, bool>
+    inline constexpr std::pair<fht_iterator, bool>
     insert(const std::pair<const K, V> & bad_pair) {
         return insert(bad_pair.first, bad_pair.second);
     }
 
 
-    void
+    inline constexpr void
     insert(std::initializer_list<const std::pair<const K, V>> ilist) {
 
         // supposedly this is a few assembly ops faster than:
@@ -638,14 +769,14 @@ struct fht_table {
     // at some point I will try and implement google's shit where they try and
     // find a key argument in pair arguments
     template<typename... Args>
-    std::pair<fht_iterator, bool>
+    inline constexpr std::pair<fht_iterator, bool>
     emplace(Args &&... args) {
         return insert(std::forward<Args>(args)...);
     }
 
     // add new key value pair
     template<typename... Args>
-    std::pair<fht_iterator, bool>
+    inline std::pair<fht_iterator, bool>
     emplace(key_pass_t new_key, Args &&... args) {
         // for now going to force explicit key & value
         const int8_t * const res = add(new_key, std::forward<Args>(args)...);
@@ -672,11 +803,9 @@ struct fht_table {
         const __m128i  tag_match = FHT_MM_SET(tag);
         const uint32_t start_idx = GEN_START_IDX(raw_slot);
 
-        // prefetch is nice for performance here
-        if (FHT_IS_SPECIAL_(FHT_SPECIAL_TYPES)) {
-            __builtin_prefetch(
-                chunk->get_key_n_ptr((FHT_MM_IDX_MULT * start_idx)));
-        }
+
+        prefetch<K>((const void * const)(
+            chunk->get_key_n_ptr((FHT_MM_IDX_MULT * start_idx))));
 
         // check for valid slot or duplicate
         uint32_t idx, slot_mask, del_idx = FHT_NODES_PER_CACHE_LINE;
@@ -781,51 +910,50 @@ struct fht_table {
              typename _V         = V,
              typename _Hasher    = Hasher,
              typename _Allocator = Allocator>
-    typename std::enable_if<FHT_NOT_SPECIAL(FHT_SPECIAL_TYPES),
-                            const int8_t * const>::type
+    typename std::enable_if<FHT_SPECIAL_CONDITIONAL, const int8_t * const>::type
     _find(key_pass_t key) const;
 
     template<typename _K         = K,
              typename _V         = V,
              typename _Hasher    = Hasher,
              typename _Allocator = Allocator>
-    typename std::enable_if<FHT_IS_SPECIAL(FHT_SPECIAL_TYPES),
+    typename std::enable_if<(!FHT_SPECIAL_CONDITIONAL),
                             const int8_t * const>::type
     _find(key_pass_t key) const;
 
-    fht_iterator
+    inline constexpr fht_iterator
     find(K && key) const {
         const int8_t * const res = _find(key);
         return (res == NULL) ? this->end() : fht_iterator(res);
     }
 
-    fht_iterator
+    inline constexpr fht_iterator
     find(const K & key) const {
         const int8_t * const res = _find(key);
         return (res == NULL) ? this->end() : fht_iterator(res);
     }
 
-    uint64_t
+    inline constexpr uint64_t
     count(const K & key) const {
         return (_find(key) != NULL);
     }
 
-    uint64_t
+    inline constexpr uint64_t
     count(K && key) const {
         return (_find(key) != NULL);
     }
 
-    bool
+    inline constexpr bool
     contains(const K & key) const {
         return count(key);
     }
 
-    bool
+    inline constexpr bool
     contains(K && key) const {
         return count(key);
     }
 
-    V &
+    inline constexpr V &
     at(const K & key) {
         const uint64_t                res   = (const uint64_t)_find(key);
         const fht_chunk<K, V> * const chunk = (const fht_chunk<K, V> * const)(
@@ -833,7 +961,7 @@ struct fht_table {
         return *(chunk->get_val_ptr_n(res & (FHT_NODES_PER_CACHE_LINE - 1)));
     }
 
-    V &
+    inline constexpr V &
     at(K && key) {
         const uint64_t                res   = (const uint64_t)_find(key);
         const fht_chunk<K, V> * const chunk = (const fht_chunk<K, V> * const)(
@@ -841,11 +969,11 @@ struct fht_table {
         return *(chunk->get_val_ptr_n(res & (FHT_NODES_PER_CACHE_LINE - 1)));
     }
 
-    V & operator[](const K & key) {
+    inline constexpr V & operator[](const K & key) {
         return at(key);
     }
 
-    V & operator[](K && key) {
+    inline constexpr V & operator[](K && key) {
         return at(key);
     }
 
@@ -856,16 +984,16 @@ struct fht_table {
              typename _V         = V,
              typename _Hasher    = Hasher,
              typename _Allocator = Allocator>
-    typename std::enable_if<FHT_NOT_SPECIAL(FHT_SPECIAL_TYPES), uint64_t>::type
-    erase(key_pass_t key) const;
+    typename std::enable_if<FHT_SPECIAL_CONDITIONAL, uint64_t>::type erase(
+        key_pass_t key) const;
 
 
     template<typename _K         = K,
              typename _V         = V,
              typename _Hasher    = Hasher,
              typename _Allocator = Allocator>
-    typename std::enable_if<FHT_IS_SPECIAL(FHT_SPECIAL_TYPES), uint64_t>::type
-    erase(key_pass_t key) const;
+    typename std::enable_if<(!FHT_SPECIAL_CONDITIONAL), uint64_t>::type erase(
+        key_pass_t key) const;
 
     void
     clear() {
@@ -879,16 +1007,21 @@ struct fht_table {
     }
 
 
-    // would be nice to implement in 4 bytes so iterator + bool fits in register
-    struct fht_iterator {
+    // would be nice to implement in 4 bytes so iterator + bool fits in
+    // register
+    template<typename fht_it_pair>
+    struct fht_iterator_t {
+
         const int8_t * cur_tag;
-        fht_iterator(const int8_t * const init_tag_pos) {
+
+        fht_iterator_t(const int8_t * const init_tag_pos) {
             this->cur_tag = init_tag_pos;
         }
 
         inline fht_iterator &
         operator=(const fht_iterator & other) {
             this->cur_tag = other.cur_tag;
+            return *this;
         }
 
         fht_iterator &
@@ -944,28 +1077,43 @@ struct fht_table {
             }
         }
 
-        inline V & operator*() const {
-            // i know this looks like a lot but really its just 7 operations, 1
-            // out of cache line (probably)
-            const fht_chunk<K, V> * const cur_chunk =
-                (const fht_chunk<K, V> * const)(
-                    ((uint64_t)(this->cur_tag)) &
-                    (~(FHT_NODES_PER_CACHE_LINE - 1)));
-
-            return *(
-                cur_chunk->get_val_n_ptr(((uint64_t)(this->cur_tag)) &
-                                         ((FHT_NODES_PER_CACHE_LINE - 1))));
+        template<typename pair_type = fht_it_pair>
+        inline constexpr typename std::enable_if<
+            std::is_same<pair_type, std::pair<K, V>>::value,
+            const fht_it_pair *>::type
+        to_address() const {
+            // basically if we are using std::pair go to the actual pair,
+            // fht_it_pair is basically just and extension of it with K / V
+            // getting functionality
+            return ((const fht_it_pair *)(((uint64_t)(this->cur_tag +
+                                                      FHT_NODES_PER_CACHE_LINE -
+                                                      1)) &
+                                          (~(FHT_NODES_PER_CACHE_LINE - 1)))) +
+                   (((uint64_t)(this->cur_tag)) &
+                    (FHT_NODES_PER_CACHE_LINE - 1));
         }
 
-        inline V * operator->() const {
-            const fht_chunk<K, V> * const cur_chunk =
-                (const fht_chunk<K, V> * const)(
-                    ((uint64_t)(this->cur_tag)) &
-                    (~(FHT_NODES_PER_CACHE_LINE - 1)));
-
-            return cur_chunk->get_val_n_ptr(((uint64_t)(this->cur_tag)) &
-                                            ((FHT_NODES_PER_CACHE_LINE - 1)));
+        template<typename pair_type = fht_it_pair>
+        inline constexpr typename std::enable_if<
+            !(std::is_same<pair_type, std::pair<K, V>>::value),
+            const fht_it_pair *>::type
+        to_address() const {
+            // basically if we are using std::pair go to the actual pair,
+            // fht_it_pair is basically just and extension of it with K / V
+            // getting functionality
+            return ((const fht_it_pair *)this);
         }
+
+
+        inline const fht_it_pair & operator*() const {
+            return *(this.to_address());
+        }
+
+
+        inline const fht_it_pair * operator->() const {
+            return this.to_address();
+        }
+
 
         inline friend bool
         operator==(const fht_iterator & it_a, const fht_iterator & it_b) {
@@ -1030,7 +1178,7 @@ fht_table<K, V, Hasher, Allocator>::fht_table(const uint64_t init_size) {
 
     // alloc chunks
     this->chunks =
-        this->alloc_mmap.init_mem((_init_size / FHT_NODES_PER_CACHE_LINE));
+        this->alloc_mmap.allocate((_init_size / FHT_NODES_PER_CACHE_LINE));
 
     // might be faster with _m512 but this is a mile from any critical path and
     // makes less portable
@@ -1044,6 +1192,7 @@ fht_table<K, V, Hasher, Allocator>::fht_table(const uint64_t init_size) {
 
     // set log
     this->log_incr = _log_init_size;
+    this->npairs   = 0;
 }
 
 // call above with FHT_DEFAULT_INIT_SIZE
@@ -1054,7 +1203,7 @@ fht_table<K, V, Hasher, Allocator>::fht_table()
 // dealloc current chunk
 template<typename K, typename V, typename Hasher, typename Allocator>
 fht_table<K, V, Hasher, Allocator>::~fht_table() {
-    this->alloc_mmap.deinit_mem(
+    this->alloc_mmap.deallocate(
         this->chunks,
         ((1 << (this->log_incr)) / FHT_NODES_PER_CACHE_LINE));
 }
@@ -1079,7 +1228,7 @@ fht_table<K, V, Hasher, Allocator>::resize() {
         (1 << (_new_log_incr - 1)) / FHT_NODES_PER_CACHE_LINE;
 
     // allocate new chunk array
-    fht_chunk<K, V> * const new_chunks = this->alloc_mmap.init_mem(_num_chunks);
+    fht_chunk<K, V> * const new_chunks = this->alloc_mmap.allocate(_num_chunks);
 
     uint32_t to_move = 0;
     uint32_t new_starts;
@@ -1271,7 +1420,7 @@ fht_table<K, V, Hasher, Allocator>::resize() {
 
     // allocate new chunk array
     fht_chunk<K, V> * const new_chunks =
-        this->alloc_mmap.init_mem(2 * _num_chunks);
+        this->alloc_mmap.allocate(2 * _num_chunks);
 
     // set this while its definetly still in cache
     this->chunks = new_chunks;
@@ -1360,7 +1509,7 @@ fht_table<K, V, Hasher, Allocator>::resize() {
     }
 
     // deallocate old table
-    this->alloc_mmap.deinit_mem(
+    this->alloc_mmap.deallocate(
         (fht_chunk<K, V> * const)old_chunks,
         ((1 << (_new_log_incr - 1)) / FHT_NODES_PER_CACHE_LINE));
 }
@@ -1370,8 +1519,7 @@ fht_table<K, V, Hasher, Allocator>::resize() {
 // Find
 template<typename K, typename V, typename Hasher, typename Allocator>
 template<typename _K, typename _V, typename _Hasher, typename _Allocator>
-typename std::enable_if<FHT_NOT_SPECIAL(FHT_SPECIAL_TYPES),
-                        const int8_t * const>::type
+typename std::enable_if<FHT_SPECIAL_CONDITIONAL, const int8_t * const>::type
 fht_table<K, V, Hasher, Allocator>::_find(key_pass_t key) const {
 
     // same deal with add
@@ -1418,7 +1566,7 @@ fht_table<K, V, Hasher, Allocator>::_find(key_pass_t key) const {
 // Delete
 template<typename K, typename V, typename Hasher, typename Allocator>
 template<typename _K, typename _V, typename _Hasher, typename _Allocator>
-typename std::enable_if<FHT_NOT_SPECIAL(FHT_SPECIAL_TYPES), uint64_t>::type
+typename std::enable_if<FHT_SPECIAL_CONDITIONAL, uint64_t>::type
 fht_table<K, V, Hasher, Allocator>::erase(key_pass_t key) const {
 
     // basically exact same as find but instead of storing the val just set
@@ -1467,8 +1615,7 @@ fht_table<K, V, Hasher, Allocator>::erase(key_pass_t key) const {
 // find optimized for larger sizes?
 template<typename K, typename V, typename Hasher, typename Allocator>
 template<typename _K, typename _V, typename _Hasher, typename _Allocator>
-typename std::enable_if<FHT_IS_SPECIAL(FHT_SPECIAL_TYPES),
-                        const int8_t * const>::type
+typename std::enable_if<(!FHT_SPECIAL_CONDITIONAL), const int8_t * const>::type
 fht_table<K, V, Hasher, Allocator>::_find(key_pass_t key) const {
 
     // seperate version of find
@@ -1522,7 +1669,7 @@ fht_table<K, V, Hasher, Allocator>::_find(key_pass_t key) const {
 // remove optimized for larger sizes?
 template<typename K, typename V, typename Hasher, typename Allocator>
 template<typename _K, typename _V, typename _Hasher, typename _Allocator>
-typename std::enable_if<FHT_IS_SPECIAL(FHT_SPECIAL_TYPES), uint64_t>::type
+typename std::enable_if<(!FHT_SPECIAL_CONDITIONAL), uint64_t>::type
 fht_table<K, V, Hasher, Allocator>::erase(key_pass_t key) const {
 
     // same logic as the find function above
@@ -1833,7 +1980,7 @@ struct SMALL_INPLACE_MMAP_ALLOC {
     ~SMALL_INPLACE_MMAP_ALLOC() {}
 
     constexpr fht_chunk<K, V> * const
-    init_mem(const uint64_t size) const {
+    allocate(const uint64_t size) const {
         assert(size <= sizeof(fht_chunk<K, V>) *
                            (FHT_DEFAULT_INIT_MEMORY / sizeof(fht_chunk<K, V>)));
         return (fht_chunk<K, V> *)myMmap(
@@ -1849,7 +1996,7 @@ struct SMALL_INPLACE_MMAP_ALLOC {
     }
 
     constexpr void
-    deinit_mem(fht_chunk<K, V> const * ptr, const size_t size) const {
+    deallocate(fht_chunk<K, V> const * ptr, const size_t size) const {
         mymunmap((void *)ptr,
                  sizeof(fht_chunk<K, V>) *
                      (FHT_DEFAULT_INIT_MEMORY / sizeof(fht_chunk<K, V>)));
@@ -1884,7 +2031,7 @@ struct INPLACE_MMAP_ALLOC {
     }
 
     fht_chunk<K, V> * const
-    init_mem(const size_t size) {
+    allocate(const size_t size) {
         const size_t old_start_offset = this->start_offset;
         this->start_offset += size;
         if (this->start_offset >= this->cur_size) {
@@ -1904,7 +2051,7 @@ struct INPLACE_MMAP_ALLOC {
     }
 
     void
-    deinit_mem(fht_chunk<K, V> * const ptr, const size_t size) const {
+    deallocate(fht_chunk<K, V> * const ptr, const size_t size) const {
         return;
     }
 };
@@ -1914,13 +2061,13 @@ template<typename K, typename V>
 struct DEFAULT_MMAP_ALLOC {
 
     fht_chunk<K, V> * const
-    init_mem(const size_t size) const {
+    allocate(const size_t size) const {
         return (fht_chunk<K, V> * const)mymmap_alloc(
             NULL,
             size * sizeof(fht_chunk<K, V>));
     }
     void
-    deinit_mem(fht_chunk<K, V> * const ptr, const size_t size) const {
+    deallocate(fht_chunk<K, V> * const ptr, const size_t size) const {
         mymunmap(ptr, size * sizeof(fht_chunk<K, V>));
     }
 };
