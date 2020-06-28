@@ -571,6 +571,8 @@ class fht_table {
     Allocator alloc_mmap;
     Returner  returner;
 
+    //////////////////////////////////////////////////////////////////////
+
     // in place resize, only works with INPLACE allocator
     template<typename _K         = K,
              typename _V         = V,
@@ -666,6 +668,7 @@ class fht_table {
                         // case where alot of deleted items = unnecissary
                         // iterations. 2 iterations approx = this cost.
                         if (chunk->get_empty(outer_idx)) {
+
                             chunk->set_key_val_tag(true_idx,
                                                    tag,
                                                    new_key,
@@ -792,7 +795,7 @@ fht_table<K, V, Returner, Hasher, Allocator>::fht_table(
             : FHT_DEFAULT_INIT_SIZE;
 
     const uint32_t _log_init_size = log_b2(_init_size);
-
+    //    int *  test = Allocator::new (NULL) int;
 
     // alloc chunks
     this->chunks =
@@ -882,16 +885,8 @@ fht_table<K, V, Returner, Hasher, Allocator>::resize() {
         // to reset deleted
         __m256i * const set_tags_vec = (__m256i * const)(old_chunk->tags_vec);
 
-        /*        set_tags_vec[0] = _mm256_blendv_epi8(set_tags_vec[0],
-                                             _mm256_set1_epi8(0x80),
-                                             set_tags_vec[0]);
-        set_tags_vec[1] = _mm256_blendv_epi8(set_tags_vec[1],
-                                             _mm256_set1_epi8(0x80),
-                                             set_tags_vec[1]); */
-
-        // I think this save a cycle. Far from critical path but still...
+        // turn all deleted tags -> INVALID (reset basically)
         set_tags_vec[0] = _mm256_min_epu8(set_tags_vec[0], FHT_RESET_VEC);
-
         set_tags_vec[1] = _mm256_min_epu8(set_tags_vec[1], FHT_RESET_VEC);
 
         uint64_t j,
@@ -933,7 +928,6 @@ fht_table<K, V, Returner, Hasher, Allocator>::resize() {
                         NEW(V,
                             *(new_chunk->get_val_n_ptr(true_idx)),
                             std::move(*(old_chunk->get_val_n_ptr(j))));
-
 
 
                         new_starts += (1 << (8 * outer_idx));
@@ -1122,14 +1116,18 @@ fht_table<K, V, Returner, Hasher, Allocator>::resize() {
                     (new_j + start_idx) & FHT_MM_LINE_MASK;
                 const uint32_t inner_idx =
                     (slot_idx >> (8 * outer_idx + 32 * nth_bit)) & 0xff;
+
                 if (__builtin_expect(inner_idx != FHT_MM_IDX_MULT, 1)) {
+                    const uint32_t true_idx =
+                        FHT_MM_IDX_MULT * outer_idx + inner_idx;
 
-                    new_chunk->set_key_val_tag(
-                        FHT_MM_IDX_MULT * outer_idx + inner_idx,
-
-                        old_chunk->get_tag_n(j),
-                        old_chunk->get_key_n(j),
-                        old_chunk->get_val_n(j));
+                    new_chunk->set_tag_n(true_idx, old_chunk->get_tag_n(j));
+                    NEW(K,
+                        *(new_chunk->get_key_n_ptr(true_idx)),
+                        std::move(*(old_chunk->get_key_n_ptr(j))));
+                    NEW(V,
+                        *(new_chunk->get_val_n_ptr(true_idx)),
+                        std::move(*(old_chunk->get_val_n_ptr(j))));
 
 
                     slot_idx += ((1UL) << (8 * outer_idx + 32 * nth_bit));

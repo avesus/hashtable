@@ -1,7 +1,7 @@
 #include "driver.h"
 #include <vector>
 
-#define STR_TEST
+#define INT_STR_TEST
 #define myfree free
 #define PRINT(V_LEVEL, ...)                                                    \
     {                                                                          \
@@ -335,14 +335,14 @@ main(int argc, char ** argv) {
         clock_gettime(CLOCK_MONOTONIC, &start);
         for (uint32_t i = 0; i < FHT_TEST_SIZE; i++) {
 #ifdef INT_TEST
-            table[test_nodes[i].key] = test_nodes[i].key;
+            table.emplace(test_nodes[i].key, test_nodes[i].val);
 #elif defined INT_STR_TEST
-            table[test_nodes[i].key] =
+            table.emplace(test_nodes[i].key,
                 "This is a pretty long"
-                "string all other things being equal ";
+                          "string all other things being equal ");
 
 #else
-            table[test_string_node[i]] = test_string_node_val[i];
+            table.emplace(test_string_node[i], test_string_node_val[i]);
 #endif
             for (uint32_t j = i * Q_PER_INS; j < (i + 1) * Q_PER_INS; j++) {
 #ifdef INT_TEST
