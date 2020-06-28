@@ -1,7 +1,7 @@
 #include "driver.h"
 #include <vector>
 
-#define INT_STR_TEST
+#define INT_TEST
 #define myfree free
 #define PRINT(V_LEVEL, ...)                                                    \
     {                                                                          \
@@ -170,9 +170,9 @@ udiv(uint64_t num, uint64_t den) {
 static void correct_test();
 #endif
 
+
 int
 main(int argc, char ** argv) {
-
     srand(rseed);
     srandom(rseed);
 
@@ -263,12 +263,12 @@ main(int argc, char ** argv) {
     if (which_table == OUR_TABLE) {
 #ifdef INT_TEST
 
-        fht_table<uint32_t, uint32_t, DEFAULT_RETURNER<uint32_t>>
+        fht_table<uint32_t, uint32_t>
 
             table(1 << init_size);
 
 #elif defined INT_STR_TEST
-        fht_table<uint32_t, std::string, DEFAULT_RETURNER<std::string>> table(
+        fht_table<uint32_t, std::string> table(
             1 << init_size);
 #elif defined TEST_TEST
         fht_table<test_type, test_type> table(1 << init_size);
@@ -281,7 +281,7 @@ main(int argc, char ** argv) {
             table.add((test_nodes + i)->key, (test_nodes + i)->val);
         }
         for (uint32_t i = 0; i < FHT_TEST_SIZE; i++) {
-            table.remove((test_nodes + i)->key);
+            table.erase((test_nodes + i)->key);
         }
 #endif
         clock_gettime(CLOCK_MONOTONIC, &start);
@@ -291,36 +291,35 @@ main(int argc, char ** argv) {
         std::string * str_ret;
         for (uint32_t i = 0; i < FHT_TEST_SIZE; i++) {
 #ifdef INT_TEST
-            counter ^= table.add((test_nodes + i)->key, (test_nodes + i)->val);
+            volatile auto sink = table.add((test_nodes + i)->key, (test_nodes + i)->val);
 #elif defined INT_STR_TEST
-            counter ^= table.add(
+            volatile auto sink = table.add(
                 (test_nodes + i)->key,
                 "A string that can and should be constructed in place!");
 
 #elif defined TEST_TEST
-            counter ^= table.add(test_type_key[i], test_type_val[i]);
+            volatile auto sink = table.add(test_type_key[i], test_type_val[i]);
 
 #else
-            counter ^= table.add(test_string_node[i], test_string_node_val[i]);
+            volatile auto sink = table.add(test_string_node[i], test_string_node_val[i]);
 #endif
             for (uint32_t j = i * Q_PER_INS; j < (i + 1) * Q_PER_INS; j++) {
 #ifdef INT_TEST
-                counter ^= table.find(test_keys[j], &ret);
+                volatile auto sink = table.find(test_keys[j]);
 #elif defined INT_STR_TEST
-                counter ^= table.find(test_keys[j], &str_ret);
+                volatile auto sink = table.find(test_keys[j]);
 #elif defined TEST_TEST
-                counter ^= table.find(test_type_test_key[i], &test_ret);
+                volatile auto sink = table.find(test_type_test_key[i]);
 #else
-                counter ^= table.find(test_string_key[j], &str_ret);
+                volatile auto sink = table.find(test_string_key[j]);
 #endif
             }
 #ifdef INT_TEST
             for (uint32_t j = i * D_PER_INS; j < (i + 1) * D_PER_INS; j++) {
-                counter ^= table.remove(del_keys[j]);
+                volatile auto sink = table.erase(del_keys[j]);
             }
 #endif
         }
-        volatile uint32_t sink = counter;
     }
     else {
 #ifdef INT_TEST
@@ -338,7 +337,7 @@ main(int argc, char ** argv) {
             table.emplace(test_nodes[i].key, test_nodes[i].val);
 #elif defined INT_STR_TEST
             table.emplace(test_nodes[i].key,
-                "This is a pretty long"
+                          "This is a pretty long"
                           "string all other things being equal ");
 
 #else
@@ -412,7 +411,7 @@ correct_test() {
             if (taken[test_nodes[i].key] == 0) {
 
                 total_unique += (att == 0);
-                assert(table.remove(test_nodes[i].key) == FHT_NOT_DELETED);
+                assert(table.erase(test_nodes[i].key) == FHT_NOT_DELETED);
                 assert(table.find(test_nodes[i].key, &ret) == FHT_NOT_FOUND);
                 assert(table.add((test_nodes + i)->key,
                                  (test_nodes + i)->val) == FHT_ADDED);
@@ -423,7 +422,7 @@ correct_test() {
                 assert(table.find(test_nodes[i].key, &ret) == FHT_FOUND);
                 assert(table.add((test_nodes + i)->key,
                                  (test_nodes + i)->val) == FHT_NOT_ADDED);
-                assert(table.remove(test_nodes[i].key) == FHT_DELETED);
+                assert(table.erase(test_nodes[i].key) == FHT_DELETED);
                 assert(table.add((test_nodes + i)->key,
                                  (test_nodes + i)->val) == FHT_ADDED);
             }
@@ -446,7 +445,7 @@ correct_test() {
                   test_nodes[i].key,
                   test_nodes[i].val);
             if (taken[test_nodes[i].key] == 1) {
-                assert(table.remove(test_nodes[i].key) == FHT_DELETED);
+                assert(table.erase(test_nodes[i].key) == FHT_DELETED);
             }
             else {
                 assert(table.find(test_nodes[i].key, &ret) == FHT_NOT_FOUND);
@@ -460,7 +459,7 @@ correct_test() {
                   test_nodes[i].key,
                   test_nodes[i].val);
             if (taken[test_nodes[i].key] == 0) {
-                assert(table.remove(test_nodes[i].key) == FHT_NOT_DELETED);
+                assert(table.erase(test_nodes[i].key) == FHT_NOT_DELETED);
                 assert(table.find(test_nodes[i].key, &ret) == FHT_NOT_FOUND);
 
                 assert(table.add((test_nodes + i)->key,
@@ -472,7 +471,7 @@ correct_test() {
                 assert(table.find(test_nodes[i].key, &ret) == FHT_FOUND);
                 assert(table.add((test_nodes + i)->key,
                                  (test_nodes + i)->val) == FHT_NOT_ADDED);
-                assert(table.remove(test_nodes[i].key) == FHT_DELETED);
+                assert(table.erase(test_nodes[i].key) == FHT_DELETED);
                 assert(table.add((test_nodes + i)->key,
                                  (test_nodes + i)->val) == FHT_ADDED);
             }
@@ -493,6 +492,7 @@ correct_test() {
             }
         }
 
+
         for (uint32_t i = 0; i < FHT_TEST_SIZE; i++) {
             PRINT(MED_VERBOSE,
                   "\r(5) %d: {%d, %d}\n",
@@ -500,7 +500,7 @@ correct_test() {
                   test_nodes[i].key,
                   test_nodes[i].val);
             if (taken[test_nodes[i].key] == 1) {
-                assert(table.remove(test_nodes[i].key) == FHT_DELETED);
+                assert(table.erase(test_nodes[i].key) == FHT_DELETED);
             }
             else {
                 assert(table.find(test_nodes[i].key, &ret) == FHT_NOT_FOUND);
@@ -517,7 +517,7 @@ correct_test() {
 
             if (taken[test_nodes[i + FHT_TEST_SIZE].key - (1 << 25)] == 0) {
                 total_unique += (att == 0);
-                assert(table.remove(test_nodes[i + FHT_TEST_SIZE].key) ==
+                assert(table.erase(test_nodes[i + FHT_TEST_SIZE].key) ==
                        FHT_NOT_DELETED);
                 assert(table.find(test_nodes[i + FHT_TEST_SIZE].key, &ret) ==
                        FHT_NOT_FOUND);
@@ -534,7 +534,7 @@ correct_test() {
                 assert(table.add((test_nodes + i + FHT_TEST_SIZE)->key,
                                  (test_nodes + i + FHT_TEST_SIZE)->val) ==
                        FHT_NOT_ADDED);
-                assert(table.remove(test_nodes[i + FHT_TEST_SIZE].key) ==
+                assert(table.erase(test_nodes[i + FHT_TEST_SIZE].key) ==
                        FHT_DELETED);
                 assert(table.add((test_nodes + i + FHT_TEST_SIZE)->key,
                                  (test_nodes + i + FHT_TEST_SIZE)->val) ==
@@ -546,7 +546,7 @@ correct_test() {
             if (taken[test_nodes[i + FHT_TEST_SIZE].key - (1 << 25)] == 1) {
                 assert(table.find(test_nodes[i + FHT_TEST_SIZE].key, &ret) ==
                        FHT_FOUND);
-                assert(table.remove(test_nodes[i + FHT_TEST_SIZE].key) ==
+                assert(table.erase(test_nodes[i + FHT_TEST_SIZE].key) ==
                        FHT_DELETED);
                 taken[test_nodes[i + FHT_TEST_SIZE].key - (1 << 25)] = 0;
             }
@@ -558,266 +558,4 @@ correct_test() {
 }
 
 
-static void
-test_spread() {
-
-    // generate primes up to some reasonable value (basically stopping when
-    // * 64 would overflow)
-    const uint32_t max_prime = 1 << 12;
-    uint32_t *     sieve     = (uint32_t *)calloc(max_prime, sizeof(uint32_t));
-
-    uint32_t max_prime_sqrt = (uint32_t)(sqrt((double)max_prime) + 1);
-    uint32_t nprimes        = max_prime - 2;
-    sieve[0]                = 1;
-    sieve[1]                = 1;
-    for (uint32_t i = 0; i < max_prime_sqrt; i++) {
-        if (sieve[i]) {
-            continue;
-        }
-        for (uint32_t j = i * i; j < max_prime; j += i) {
-            sieve[j] = 1;
-            nprimes--;
-        }
-    }
-    uint32_t * primes = (uint32_t *)calloc(nprimes, sizeof(uint32_t));
-
-    uint32_t iter = 0;
-    for (uint32_t i = 0; i < max_prime; i++) {
-        if (sieve[i]) {
-            continue;
-        }
-        primes[iter++] = i;
-    }
-
-    myfree(sieve);
-
-
-    nprimes               = iter;
-    const uint32_t target = fun_guess;
-    for (uint32_t start = 0; start < 64 - target; start++) {
-        // test linear
-        for (uint32_t i = 0; i < nprimes && 0; i++) {
-            uint64_t mask = 0;
-            for (uint32_t j = start; j < 64; j++) {
-                if (mask & ((1UL) << ((primes[i] * j) & 63))) {
-                    break;
-                }
-                mask |= ((1UL) << ((primes[i] * j) & 63));
-            }
-            if (mask == (~(0UL))) {
-                fprintf(stderr, "Func(%d): %d x\n", start, primes[i]);
-            }
-        }
-        for (uint32_t i = 0; i < nprimes; i++) {
-            uint64_t mask = 0;
-            for (uint32_t j = start; j < 64; j++) {
-                if (mask & ((1UL) << ((primes[i] ^ j) & 63))) {
-                    break;
-                }
-                mask |= ((1UL) << ((primes[i] ^ j) & 63));
-            }
-            if (mask == (~(0UL))) {
-                fprintf(stderr, "Func(%d): %d XOR x\n", start, primes[i]);
-            }
-        }
-        for (uint32_t i = 0; i < nprimes; i++) {
-            uint64_t mask = 0;
-            for (uint32_t j = start; j < target; j++) {
-                if (mask & ((1UL) << ((primes[i] * j * j) & 63))) {
-                    break;
-                }
-                mask |= ((1UL) << ((primes[i] * j * j) & 63));
-            }
-            if (bitcount_64(mask) == target && i) {
-                fprintf(stderr, "Func(%d): %d x^2\n", start, primes[i]);
-            }
-        }
-        for (uint32_t i = 0; i < nprimes; i++) {
-            uint64_t mask = 0;
-            for (uint32_t j = start; j < target; j++) {
-                if (mask & ((1UL) << ((primes[i] * j * j + j) & 63))) {
-                    break;
-                }
-                mask |= ((1UL) << ((primes[i] * j * j + j) & 63));
-            }
-            if (bitcount_64(mask) == target && i) {
-                fprintf(stderr, "Func(%d): %d x^2 + x\n", start, primes[i]);
-            }
-        }
-        for (uint32_t i = 0; i < nprimes; i++) {
-            for (uint32_t ii = 0; ii < nprimes; ii++) {
-                uint64_t mask = 0;
-                for (uint32_t j = start; j < target; j++) {
-                    if (mask & ((1UL) << ((primes[i] * j * j + primes[ii] * j) &
-                                          63))) {
-                        break;
-                    }
-                    mask |=
-                        ((1UL) << ((primes[i] * j * j + primes[ii] * j) & 63));
-                }
-                if (bitcount_64(mask) == target && i) {
-                    fprintf(stderr,
-                            "Func(%d): %d x^2 + %d x\n",
-                            start,
-                            primes[i],
-                            primes[ii]);
-                }
-            }
-        }
-        uint64_t seed_mask = 0;
-        for (uint32_t i = start; i < (16u) + start; i++) {
-            seed_mask |= (((1UL) << ((i * i) & 63)));
-        }
-
-        for (uint32_t i = 0; i < nprimes; i++) {
-            uint64_t mask = seed_mask;
-            for (uint32_t j = 16 + start; j < target; j++) {
-                if (mask & ((1UL) << ((primes[i] * j * j) & 63))) {
-                    break;
-                }
-                mask |= ((1UL) << ((primes[i] * j * j) & 63));
-            }
-            if (bitcount_64(mask) == target && i) {
-                fprintf(stderr, "Seed Func(%d): %d x^2\n", start, primes[i]);
-            }
-        }
-        for (uint32_t i = 0; i < nprimes; i++) {
-            uint64_t mask = seed_mask;
-            for (uint32_t j = 16 + start; j < target; j++) {
-                if (mask & ((1UL) << ((primes[i] * j * j + j) & 63))) {
-                    break;
-                }
-                mask |= ((1UL) << ((primes[i] * j * j + j) & 63));
-            }
-            if (bitcount_64(mask) == target && i) {
-                fprintf(stderr,
-                        "Seed Func(%d): %d x^2 + x\n",
-                        start,
-                        primes[i]);
-            }
-        }
-        for (uint32_t i = 0; i < nprimes; i++) {
-            for (uint32_t ii = 0; ii < nprimes; ii++) {
-                uint64_t mask = seed_mask;
-                for (uint32_t j = 16 + start; j < target; j++) {
-                    if (mask & ((1UL) << ((primes[i] * j * j + primes[ii] * j) &
-                                          63))) {
-                        break;
-                    }
-                    mask |=
-                        ((1UL) << ((primes[i] * j * j + primes[ii] * j) & 63));
-                }
-                if (bitcount_64(mask) == target && i) {
-                    fprintf(stderr,
-                            "Seed Func(%d): %d x^2 + %d x\n",
-                            start,
-                            primes[i],
-                            primes[ii]);
-                }
-            }
-        }
-        seed_mask = 0;
-        for (uint32_t i = start; i < (16u) + start; i++) {
-            seed_mask |= 2 * i;
-        }
-        for (uint32_t i = 0; i < nprimes; i++) {
-            uint64_t mask = seed_mask;
-            for (uint32_t j = 16 + start; j < target; j++) {
-                if (mask & ((1UL) << ((primes[i] * j * j) & 63))) {
-                    break;
-                }
-                mask |= ((1UL) << ((primes[i] * j * j) & 63));
-            }
-            if (bitcount_64(mask) == target && i) {
-                fprintf(stderr, "Seed 2 Func(%d): %d x^2\n", start, primes[i]);
-            }
-        }
-        for (uint32_t i = 0; i < nprimes; i++) {
-            uint64_t mask = seed_mask;
-            for (uint32_t j = 16 + start; j < target; j++) {
-                if (mask & ((1UL) << ((primes[i] * j * j + j) & 63))) {
-                    break;
-                }
-                mask |= ((1UL) << ((primes[i] * j * j + j) & 63));
-            }
-            if (bitcount_64(mask) == target && i) {
-                fprintf(stderr,
-                        "Seed 2 Func(%d): %d x^2 + x\n",
-                        start,
-                        primes[i]);
-            }
-        }
-        for (uint32_t i = 0; i < nprimes; i++) {
-            for (uint32_t ii = 0; ii < nprimes; ii++) {
-                uint64_t mask = seed_mask;
-                for (uint32_t j = 16 + start; j < target; j++) {
-                    if (mask & ((1UL) << ((primes[i] * j * j + primes[ii] * j) &
-                                          63))) {
-                        break;
-                    }
-                    mask |=
-                        ((1UL) << ((primes[i] * j * j + primes[ii] * j) & 63));
-                }
-                if (bitcount_64(mask) == target && i) {
-                    fprintf(stderr,
-                            "Seed 2 Func(%d): %d x^2 + %d x\n",
-                            start,
-                            primes[i],
-                            primes[ii]);
-                }
-            }
-        }
-        seed_mask = 0;
-        for (uint32_t i = start; i < (16u) + start; i++) {
-            seed_mask |= 3 * i;
-        }
-        for (uint32_t i = 0; i < nprimes; i++) {
-            uint64_t mask = seed_mask;
-            for (uint32_t j = 16 + start; j < target; j++) {
-                if (mask & ((1UL) << ((primes[i] * j * j) & 63))) {
-                    break;
-                }
-                mask |= ((1UL) << ((primes[i] * j * j) & 63));
-            }
-            if (bitcount_64(mask) == target && i) {
-                fprintf(stderr, "Seed 3 Func(%d): %d x^2\n", start, primes[i]);
-            }
-        }
-        for (uint32_t i = 0; i < nprimes; i++) {
-            uint64_t mask = seed_mask;
-            for (uint32_t j = 16 + start; j < target; j++) {
-                if (mask & ((1UL) << ((primes[i] * j * j + j) & 63))) {
-                    break;
-                }
-                mask |= ((1UL) << ((primes[i] * j * j + j) & 63));
-            }
-            if (bitcount_64(mask) == target && i) {
-                fprintf(stderr,
-                        "Seed 3 Func(%d): %d x^2 + x\n",
-                        start,
-                        primes[i]);
-            }
-        }
-        for (uint32_t i = 0; i < nprimes; i++) {
-            for (uint32_t ii = 0; ii < nprimes; ii++) {
-                uint64_t mask = seed_mask;
-                for (uint32_t j = 16 + start; j < target; j++) {
-                    if (mask & ((1UL) << ((primes[i] * j * j + primes[ii] * j) &
-                                          63))) {
-                        break;
-                    }
-                    mask |=
-                        ((1UL) << ((primes[i] * j * j + primes[ii] * j) & 63));
-                }
-                if (bitcount_64(mask) == target && i) {
-                    fprintf(stderr,
-                            "Seed 3 Func(%d): %d x^2 + %d x\n",
-                            start,
-                            primes[i],
-                            primes[ii]);
-                }
-            }
-        }
-    }
-}
 #endif

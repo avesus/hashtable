@@ -24,15 +24,8 @@
 //////////////////////////////////////////////////////////////////////
 // Table params
 // return values
-const uint32_t FHT_NOT_ADDED = 0;
-const uint32_t FHT_ADDED     = 1;
-
-//(get value found with store_val argument)
-const uint32_t FHT_NOT_FOUND = 0;
-const uint32_t FHT_FOUND     = 1;
-
-const uint32_t FHT_NOT_DELETED = 0;
-const uint32_t FHT_DELETED     = 1;
+const uint64_t FHT_NOT_ERASED = 0;
+const uint64_t FHT_ERASED     = 1;
 
 
 // tunable
@@ -110,21 +103,6 @@ static const uint32_t FHT_MM_IDX_MASK = FHT_MM_IDX_MULT - 1;
 //////////////////////////////////////////////////////////////////////
 // forward declaration of default helper struct
 // near their implementations below are some alternatives ive written
-
-// default return expect ptr to val type if val type is a arithmetic or ptr (i.e
-// if val is an int/float or int * / float * pass int * / float * or int ** or
-// float ** respectively) in which case it will copy val for a found key into.
-// If val is not a default type (i.e c++ string) it will expect a ** of val type
-// (i.e val is c++ string, expect store return as string **). This is basically
-// to ensure unnecissary copying of larger types doesn't happen but smaller
-// types will still be copied cleanly. Returner that sets a different protocol
-// can be implemented (or you can just use REF_RETURNER which has already been
-// defined).
-// Must Define:
-// ret_type_t
-// to_ret_type(ret_type_t, V * const)
-template<typename V>
-struct DEFAULT_RETURNER;
 
 // depending on type chooses from a few optimized hash functions. Nothing too
 // fancy.
@@ -355,8 +333,8 @@ struct fht_chunk {
     inline constexpr
         typename std::enable_if<(FHT_NOT_SPECIAL(FHT_SPECIAL_TYPES) &&
                                  sizeof(_K) <= FHT_SEPERATE_THRESH),
-                                V * const>::type
-        __attribute__((always_inline)) get_val_n_ptr(const uint32_t n) const {
+                                V * const>::type __attribute__((always_inline))
+        get_val_n_ptr(const uint32_t n) const {
         return (V * const)(&(this->nodes.vals[n]));
     }
 
@@ -464,8 +442,8 @@ struct fht_chunk {
     inline constexpr
         typename std::enable_if<(FHT_IS_SPECIAL(FHT_SPECIAL_TYPES) ||
                                  sizeof(_K) > FHT_SEPERATE_THRESH),
-                                V * const>::type
-        __attribute__((always_inline)) get_val_n_ptr(const uint32_t n) const {
+                                V * const>::type __attribute__((always_inline))
+        get_val_n_ptr(const uint32_t n) const {
         return (V * const)(&(this->nodes.nodes[n].val));
     }
 
@@ -531,10 +509,9 @@ struct fht_chunk {
 // Table class
 template<typename K,
          typename V,
-         typename Returner  = DEFAULT_RETURNER<V>,
          typename Hasher    = DEFAULT_HASH_64<K>,
          typename Allocator = INPLACE_MMAP_ALLOC<K, V>>
-class fht_table {
+struct fht_table {
 
 
     // log of table size
@@ -546,14 +523,42 @@ class fht_table {
     // helper classes
     Hasher    hash;
     Allocator alloc_mmap;
-    Returner  returner;
 
     //////////////////////////////////////////////////////////////////////
+    // very basic info
+    inline constexpr bool
+    empty() const {
+        return !(this->npairs);
+    }
+    inline constexpr uint64_t
+    size() const {
+        return this->npairs;
+    }
+    inline constexpr uint64_t
+    max_size() const {
+        return (1UL) << this->log_size;
+    }
+
+    inline constexpr double
+    load_factor() const {
+        return ((double)this->size()) / ((double)this->max_size());
+    }
+
+    // aint gunna do anything about this
+    inline constexpr double
+    max_load_factor() const {
+        return 1.0;
+    }
+
+
+    //////////////////////////////////////////////////////////////////////
+
+    //////////////////////////////////////////////////////////////////////
+    // stuff related to adding elements
 
     // in place resize, only works with INPLACE allocator
     template<typename _K         = K,
              typename _V         = V,
-             typename _Returner  = Returner,
              typename _Hasher    = Hasher,
              typename _Allocator = Allocator>
     typename std::enable_if<
@@ -564,7 +569,6 @@ class fht_table {
     // standard resize which copies all elements
     template<typename _K         = K,
              typename _V         = V,
-             typename _Returner  = Returner,
              typename _Hasher    = Hasher,
              typename _Allocator = Allocator>
     typename std::enable_if<
@@ -578,19 +582,81 @@ class fht_table {
 
     using key_pass_t = typename fht_chunk<K, V>::key_pass_t;
     using val_pass_t = typename fht_chunk<K, V>::val_pass_t;
-    using ret_type_t = typename Returner::ret_type_t;
+    struct fht_iterator;
 
-   public:
     fht_table(const uint64_t init_size);
     // defaults to FHT_DEFAULT_INIT_SIZE (really???)
     fht_table();
     ~fht_table();
 
-    // add new key value pair
+    //////////////////////////////////////////////////////////////////////
+    // add new key value pair stuff
 
+    // slightly different logic than emplace...
+    template<typename... Args>
+    std::pair<fht_iterator, bool>
+    insert_or_assign(key_pass_t new_key, Args &&... args) {
+        const uint64_t res =
+            (const uint64_t)add(new_key, std::forward<Args>(args)...);
+        if (res & 0x1) {
+            NEW(V,
+                *((V * const)((res >> 1) << 1)),
+                std::forward<Args>(args)...);
+        }
+        return std::pair<fht_iterator, bool>(
+            ((const int8_t * const)((res >> 1) << 1)),
+            !(res & 0x1));
+    }
 
     template<typename... Args>
-    const uint32_t
+    std::pair<fht_iterator, bool>
+    insert(key_pass_t new_key, Args &&... args) {
+        return emplace(new_key, std::forward<Args>(args)...);
+    }
+
+    //////////////////////////////////////////////////////////////////////
+    // Its probably a bad idea to use any other inserts below
+    std::pair<fht_iterator, bool>
+    insert(const std::pair<const K, V> & bad_pair) {
+        return insert(bad_pair.first, bad_pair.second);
+    }
+
+
+    void
+    insert(std::initializer_list<const std::pair<const K, V>> ilist) {
+
+        // supposedly this is a few assembly ops faster than:
+        // for(it = begin(); it != end(); ++it)
+        // but you really should never be using this.
+        for (auto p : ilist) {
+            emplace(p.first, p.second);
+        }
+    }
+    //////////////////////////////////////////////////////////////////////
+
+
+    // at some point I will try and implement google's shit where they try and
+    // find a key argument in pair arguments
+    template<typename... Args>
+    std::pair<fht_iterator, bool>
+    emplace(Args &&... args) {
+        return insert(std::forward<Args>(args)...);
+    }
+
+    // add new key value pair
+    template<typename... Args>
+    std::pair<fht_iterator, bool>
+    emplace(key_pass_t new_key, Args &&... args) {
+        // for now going to force explicit key & value
+        const int8_t * const res = add(new_key, std::forward<Args>(args)...);
+        return (((uint64_t)res) & 0x1)
+                   ? (std::pair<fht_iterator, bool>(this->end(), false))
+                   : (std::pair<fht_iterator, bool>(fht_iterator(res),
+                                                    ++this->npairs));
+    }
+
+    template<typename... Args>
+    const int8_t * const
     add(key_pass_t new_key, Args &&... args) {
 
         // get all derferncing of this out of the way
@@ -624,8 +690,8 @@ class fht_table {
 
                 if (__builtin_expect((chunk->compare_key_n(true_idx, new_key)),
                                      1)) {
-
-                    return FHT_NOT_ADDED;
+                    return (const int8_t * const)(
+                        (((uint64_t)chunk->get_val_n_ptr(true_idx)) | 0x1));
                 }
 
                 slot_mask ^= (1 << idx);
@@ -650,8 +716,7 @@ class fht_table {
                                                    tag,
                                                    new_key,
                                                    std::forward<Args>(args)...);
-
-                            return FHT_ADDED;
+                            return ((const int8_t * const)chunk) + true_idx;
                         }
 
                         del_idx = true_idx;
@@ -661,7 +726,7 @@ class fht_table {
                                                tag,
                                                new_key,
                                                std::forward<Args>(args)...);
-                        return FHT_ADDED;
+                        return ((const int8_t * const)chunk) + true_idx;
                     }
                 }
             }
@@ -670,7 +735,7 @@ class fht_table {
                                        tag,
                                        new_key,
                                        std::forward<Args>(args)...);
-                return FHT_ADDED;
+                return ((const int8_t * const)chunk) + del_idx;
             }
         }
 
@@ -679,8 +744,7 @@ class fht_table {
                                    tag,
                                    new_key,
                                    std::forward<Args>(args)...);
-
-            return FHT_ADDED;
+            return ((const int8_t * const)chunk) + del_idx;
         }
 
         // no valid slot found so resize
@@ -697,57 +761,251 @@ class fht_table {
 
             if (__builtin_expect(_slot_mask, 1)) {
                 __asm__("tzcnt %1, %0" : "=r"((idx)) : "rm"((_slot_mask)));
-                new_chunk->set_key_val_tag(FHT_MM_IDX_MULT * outer_idx + idx,
+                const uint32_t true_idx = FHT_MM_IDX_MULT * outer_idx + idx;
+                new_chunk->set_key_val_tag(true_idx,
                                            tag,
                                            new_key,
                                            std::forward<Args>(args)...);
 
 
-                return FHT_ADDED;
+                return ((const int8_t * const)new_chunk) + true_idx;
             }
         }
         // probability of this is 1 / (2 ^ 64)
         assert(0);
     }
+    //////////////////////////////////////////////////////////////////////
+    // stuff related to finding elements
 
-    // NOT_SPECIAL type find/remove
     template<typename _K         = K,
              typename _V         = V,
-             typename _Returner  = Returner,
              typename _Hasher    = Hasher,
              typename _Allocator = Allocator>
     typename std::enable_if<FHT_NOT_SPECIAL(FHT_SPECIAL_TYPES),
-                            const uint32_t>::type
-    find(key_pass_t key, ret_type_t store_val) const;
-
+                            const int8_t * const>::type
+    _find(key_pass_t key) const;
 
     template<typename _K         = K,
              typename _V         = V,
-             typename _Returner  = Returner,
-             typename _Hasher    = Hasher,
-             typename _Allocator = Allocator>
-    typename std::enable_if<FHT_NOT_SPECIAL(FHT_SPECIAL_TYPES),
-                            const uint32_t>::type
-    remove(key_pass_t key) const;
-
-    // special type find/remove
-    template<typename _K         = K,
-             typename _V         = V,
-             typename _Returner  = Returner,
              typename _Hasher    = Hasher,
              typename _Allocator = Allocator>
     typename std::enable_if<FHT_IS_SPECIAL(FHT_SPECIAL_TYPES),
-                            const uint32_t>::type
-    find(key_pass_t key, ret_type_t store_val) const;
+                            const int8_t * const>::type
+    _find(key_pass_t key) const;
+
+    fht_iterator
+    find(K && key) const {
+        const int8_t * const res = _find(key);
+        return (res == NULL) ? this->end() : fht_iterator(res);
+    }
+
+    fht_iterator
+    find(const K & key) const {
+        const int8_t * const res = _find(key);
+        return (res == NULL) ? this->end() : fht_iterator(res);
+    }
+
+    uint64_t
+    count(const K & key) const {
+        return (_find(key) != NULL);
+    }
+
+    uint64_t
+    count(K && key) const {
+        return (_find(key) != NULL);
+    }
+
+    bool
+    contains(const K & key) const {
+        return count(key);
+    }
+
+    bool
+    contains(K && key) const {
+        return count(key);
+    }
+
+        V & at(const K & key) {
+        const uint64_t                res   = (const uint64_t)_find(key);
+        const fht_chunk<K, V> * const chunk = (const fht_chunk<K, V> * const)(
+            res & (~(FHT_NODES_PER_CACHE_LINE - 1)));
+        return *(chunk->get_val_ptr_n(res & (FHT_NODES_PER_CACHE_LINE - 1)));
+    }
+
+    V & at(K && key) {
+        const uint64_t                res   = (const uint64_t)_find(key);
+        const fht_chunk<K, V> * const chunk = (const fht_chunk<K, V> * const)(
+            res & (~(FHT_NODES_PER_CACHE_LINE - 1)));
+        return *(chunk->get_val_ptr_n(res & (FHT_NODES_PER_CACHE_LINE - 1)));
+    }
+
+    V & operator[](const K & key) {
+        return at(key);
+    }
+
+    V & operator[](K && key) {
+        return at(key);
+    }
+
+
+
+    //////////////////////////////////////////////////////////////////////
+    // deleting stuff
+    template<typename _K         = K,
+             typename _V         = V,
+             typename _Hasher    = Hasher,
+             typename _Allocator = Allocator>
+    typename std::enable_if<FHT_NOT_SPECIAL(FHT_SPECIAL_TYPES), uint64_t>::type
+    erase(key_pass_t key) const;
+
 
     template<typename _K         = K,
              typename _V         = V,
-             typename _Returner  = Returner,
              typename _Hasher    = Hasher,
              typename _Allocator = Allocator>
-    typename std::enable_if<FHT_IS_SPECIAL(FHT_SPECIAL_TYPES),
-                            const uint32_t>::type
-    remove(key_pass_t key) const;
+    typename std::enable_if<FHT_IS_SPECIAL(FHT_SPECIAL_TYPES), uint64_t>::type
+    erase(key_pass_t key) const;
+
+    void
+    clear() {
+        const uint32_t num_chunks = 1 << this->log_incr;
+        const __m256i  INV_SETTER = _mm256_set1_epi8(INVALID_MASK);
+
+        for (uint32_t i = 0; i < num_chunks; i++) {
+            ((__m256i * const)this->chunks[i])[0] = INV_SETTER;
+            ((__m256i * const)this->chunks[i])[1] = INV_SETTER;
+        }
+    }
+
+
+    // would be nice to implement in 4 bytes so iterator + bool fits in register
+    struct fht_iterator {
+        const int8_t * cur_tag;
+        fht_iterator(const int8_t * const init_tag_pos) {
+            this->cur_tag = init_tag_pos;
+        }
+
+        inline fht_iterator &
+        operator=(const fht_iterator & other) {
+            this->cur_tag = other.cur_tag;
+        }
+
+        fht_iterator &
+        operator++() {
+            do {
+                if (__builtin_expect(((uint64_t)(this->cur_tag) %
+                                      FHT_NODES_PER_CACHE_LINE) ==
+                                         (FHT_NODES_PER_CACHE_LINE - 1),
+                                     0)) {
+                    this->cur_tag += sizeof(typename fht_chunk<K, V>::node_t);
+                }
+                this->cur_tag++;
+            } while (RESIZE_SKIP(*(this->cur_tag)));
+            return *this;
+        }
+
+        fht_iterator &
+        operator++(int) {
+            ++(*this);
+            return *this;
+        }
+
+        inline fht_iterator &
+        operator+=(uint32_t n) {
+            while (n) {
+                this ++;
+            }
+        }
+
+        fht_iterator &
+        operator--() {
+            do {
+                if (__builtin_expect(((uint64_t)(this->cur_tag) %
+                                      FHT_NODES_PER_CACHE_LINE) == 0,
+                                     0)) {
+                    this->cur_tag -= sizeof(typename fht_chunk<K, V>::node_t);
+                }
+                this->cur_tag--;
+            } while (RESIZE_SKIP(*cur_tag));
+            return *this;
+        }
+
+        fht_iterator &
+        operator--(int) {
+            --(*this);
+            return *this;
+        }
+
+        inline fht_iterator &
+        operator-=(uint32_t n) {
+            while (n) {
+                this --;
+            }
+        }
+
+        inline V & operator*() const {
+            // i know this looks like a lot but really its just 7 operations, 1
+            // out of cache line (probably)
+            const fht_chunk<K, V> * const cur_chunk =
+                (const fht_chunk<K, V> * const)(
+                    ((uint64_t)(this->cur_tag)) &
+                    (~(FHT_NODES_PER_CACHE_LINE - 1)));
+
+            return *(
+                cur_chunk->get_val_n_ptr(((uint64_t)(this->cur_tag)) &
+                                         ((FHT_NODES_PER_CACHE_LINE - 1))));
+        }
+
+        inline V * operator->() const {
+            const fht_chunk<K, V> * const cur_chunk =
+                (const fht_chunk<K, V> * const)(
+                    ((uint64_t)(this->cur_tag)) &
+                    (~(FHT_NODES_PER_CACHE_LINE - 1)));
+
+            return cur_chunk->get_val_n_ptr(((uint64_t)(this->cur_tag)) &
+                                            ((FHT_NODES_PER_CACHE_LINE - 1)));
+        }
+
+        inline friend bool
+        operator==(const fht_iterator & it_a, const fht_iterator & it_b) {
+            return ((uint64_t)(it_a.cur_tag)) == ((uint64_t)(it_b.cur_tag));
+        }
+
+        inline friend bool
+        operator!=(const fht_iterator & it_a, const fht_iterator & it_b) {
+            return ((uint64_t)(it_a.cur_tag)) != ((uint64_t)(it_b.cur_tag));
+        }
+
+        inline friend bool
+        operator<(const fht_iterator & it_a, const fht_iterator & it_b) {
+            return ((uint64_t)(it_a.cur_tag)) < ((uint64_t)(it_b.cur_tag));
+        }
+
+        inline friend bool
+        operator>(const fht_iterator & it_a, const fht_iterator & it_b) {
+            return ((uint64_t)(it_a.cur_tag)) > ((uint64_t)(it_b.cur_tag));
+        }
+
+        inline friend bool
+        operator<=(const fht_iterator & it_a, const fht_iterator & it_b) {
+            return ((uint64_t)(it_a.cur_tag)) <= ((uint64_t)(it_b.cur_tag));
+        }
+
+        inline friend bool
+        operator>=(const fht_iterator & it_a, const fht_iterator & it_b) {
+            return ((uint64_t)(it_a.cur_tag)) >= ((uint64_t)(it_b.cur_tag));
+        }
+    };
+    inline fht_iterator
+    begin() const {
+        return fht_iterator((const int8_t *)this->chunks);
+    }
+
+    inline fht_iterator
+    end() const {
+        return fht_iterator(((const int8_t *)this->chunks) +
+                            (1UL << this->log_incr) + FHT_NODES_PER_CACHE_LINE);
+    }
 };
 
 
@@ -757,13 +1015,8 @@ class fht_table {
 
 //////////////////////////////////////////////////////////////////////
 // Constructor / Destructor
-template<typename K,
-         typename V,
-         typename Returner,
-         typename Hasher,
-         typename Allocator>
-fht_table<K, V, Returner, Hasher, Allocator>::fht_table(
-    const uint64_t init_size) {
+template<typename K, typename V, typename Hasher, typename Allocator>
+fht_table<K, V, Hasher, Allocator>::fht_table(const uint64_t init_size) {
 
     // ensure init_size is above min
     const uint64_t _init_size =
@@ -780,10 +1033,11 @@ fht_table<K, V, Returner, Hasher, Allocator>::fht_table(
 
     // might be faster with _m512 but this is a mile from any critical path and
     // makes less portable
-    const __m128i inv_match = FHT_MM_SET(INVALID_MASK);
+    const __m256i INV_SETTER = _mm256_set1_epi8(INVALID_MASK);
     for (uint32_t i = 0; i < (_init_size / FHT_NODES_PER_CACHE_LINE); i++) {
         for (uint32_t j = 0; j < FHT_MM_LINE; j++) {
-            this->chunks[i].tags_vec[j] = inv_match;
+            ((__m256i * const)(this->chunks + i))[0] = INV_SETTER;
+            ((__m256i * const)(this->chunks + i))[1] = INV_SETTER;
         }
     }
 
@@ -792,21 +1046,13 @@ fht_table<K, V, Returner, Hasher, Allocator>::fht_table(
 }
 
 // call above with FHT_DEFAULT_INIT_SIZE
-template<typename K,
-         typename V,
-         typename Returner,
-         typename Hasher,
-         typename Allocator>
-fht_table<K, V, Returner, Hasher, Allocator>::fht_table()
+template<typename K, typename V, typename Hasher, typename Allocator>
+fht_table<K, V, Hasher, Allocator>::fht_table()
     : fht_table(FHT_DEFAULT_INIT_SIZE) {}
 
 // dealloc current chunk
-template<typename K,
-         typename V,
-         typename Returner,
-         typename Hasher,
-         typename Allocator>
-fht_table<K, V, Returner, Hasher, Allocator>::~fht_table() {
+template<typename K, typename V, typename Hasher, typename Allocator>
+fht_table<K, V, Hasher, Allocator>::~fht_table() {
     this->alloc_mmap.deinit_mem(
         this->chunks,
         ((1 << (this->log_incr)) / FHT_NODES_PER_CACHE_LINE));
@@ -816,20 +1062,12 @@ fht_table<K, V, Returner, Hasher, Allocator>::~fht_table() {
 //////////////////////////////////////////////////////////////////////
 
 // Resize In Place
-template<typename K,
-         typename V,
-         typename Returner,
-         typename Hasher,
-         typename Allocator>
-template<typename _K,
-         typename _V,
-         typename _Returner,
-         typename _Hasher,
-         typename _Allocator>
+template<typename K, typename V, typename Hasher, typename Allocator>
+template<typename _K, typename _V, typename _Hasher, typename _Allocator>
 typename std::enable_if<
     std::is_same<_Allocator, INPLACE_MMAP_ALLOC<_K, _V>>::value,
     void>::type
-fht_table<K, V, Returner, Hasher, Allocator>::resize() {
+fht_table<K, V, Hasher, Allocator>::resize() {
 
     // incr table log
     const uint32_t          _new_log_incr = ++(this->log_incr);
@@ -1015,20 +1253,12 @@ fht_table<K, V, Returner, Hasher, Allocator>::resize() {
 
 
 // Resize Standard
-template<typename K,
-         typename V,
-         typename Returner,
-         typename Hasher,
-         typename Allocator>
-template<typename _K,
-         typename _V,
-         typename _Returner,
-         typename _Hasher,
-         typename _Allocator>
+template<typename K, typename V, typename Hasher, typename Allocator>
+template<typename _K, typename _V, typename _Hasher, typename _Allocator>
 typename std::enable_if<
     !(std::is_same<_Allocator, INPLACE_MMAP_ALLOC<_K, _V>>::value),
     void>::type
-fht_table<K, V, Returner, Hasher, Allocator>::resize() {
+fht_table<K, V, Hasher, Allocator>::resize() {
 
     // incr table log
     const uint32_t                _new_log_incr = ++(this->log_incr);
@@ -1137,20 +1367,11 @@ fht_table<K, V, Returner, Hasher, Allocator>::resize() {
 
 //////////////////////////////////////////////////////////////////////
 // Find
-template<typename K,
-         typename V,
-         typename Returner,
-         typename Hasher,
-         typename Allocator>
-template<typename _K,
-         typename _V,
-         typename _Returner,
-         typename _Hasher,
-         typename _Allocator>
+template<typename K, typename V, typename Hasher, typename Allocator>
+template<typename _K, typename _V, typename _Hasher, typename _Allocator>
 typename std::enable_if<FHT_NOT_SPECIAL(FHT_SPECIAL_TYPES),
-                        const uint32_t>::type
-fht_table<K, V, Returner, Hasher, Allocator>::find(key_pass_t key,
-                                                   ret_type_t store_val) const {
+                        const int8_t * const>::type
+fht_table<K, V, Hasher, Allocator>::_find(key_pass_t key) const {
 
     // same deal with add
     const uint32_t                _log_incr = this->log_incr;
@@ -1179,36 +1400,25 @@ fht_table<K, V, Returner, Hasher, Allocator>::find(key_pass_t key,
             __asm__("tzcnt %1, %0" : "=r"((idx)) : "rm"((slot_mask)));
             const uint32_t true_idx = FHT_MM_IDX_MULT * outer_idx + idx;
             if (__builtin_expect((chunk->compare_key_n(true_idx, key)), 1)) {
-                this->returner.to_ret_type(store_val,
-                                           chunk->get_val_n_ptr(true_idx));
-                return FHT_FOUND;
+                return ((const int8_t * const)chunk) + true_idx;
             }
             slot_mask ^= (1 << idx);
         }
 
         if (__builtin_expect(chunk->get_empty(outer_idx), 1)) {
-            return FHT_NOT_FOUND;
+            return NULL;
         }
     }
-    return FHT_NOT_FOUND;
+    return NULL;
 }
 
 
 //////////////////////////////////////////////////////////////////////
 // Delete
-template<typename K,
-         typename V,
-         typename Returner,
-         typename Hasher,
-         typename Allocator>
-template<typename _K,
-         typename _V,
-         typename _Returner,
-         typename _Hasher,
-         typename _Allocator>
-typename std::enable_if<FHT_NOT_SPECIAL(FHT_SPECIAL_TYPES),
-                        const uint32_t>::type
-fht_table<K, V, Returner, Hasher, Allocator>::remove(key_pass_t key) const {
+template<typename K, typename V, typename Hasher, typename Allocator>
+template<typename _K, typename _V, typename _Hasher, typename _Allocator>
+typename std::enable_if<FHT_NOT_SPECIAL(FHT_SPECIAL_TYPES), uint64_t>::type
+fht_table<K, V, Hasher, Allocator>::erase(key_pass_t key) const {
 
     // basically exact same as find but instead of storing the val just set
     // tag to deleted
@@ -1237,36 +1447,28 @@ fht_table<K, V, Returner, Hasher, Allocator>::remove(key_pass_t key) const {
             const uint32_t true_idx = FHT_MM_IDX_MULT * outer_idx + idx;
             if ((chunk->compare_key_n(true_idx, key))) {
                 chunk->delete_tag_n(true_idx);
-                return FHT_DELETED;
+                return FHT_ERASED;
             }
             slot_mask ^= (1 << idx);
         }
 
         if (__builtin_expect(chunk->get_empty(outer_idx), 1)) {
-            return FHT_NOT_DELETED;
+            return FHT_NOT_ERASED;
         }
     }
 
-    return FHT_NOT_DELETED;
+    return FHT_NOT_ERASED;
 }
 
 //////////////////////////////////////////////////////////////////////
 // Optimized for larger sizes?
 
 // find optimized for larger sizes?
-template<typename K,
-         typename V,
-         typename Returner,
-         typename Hasher,
-         typename Allocator>
-template<typename _K,
-         typename _V,
-         typename _Returner,
-         typename _Hasher,
-         typename _Allocator>
-typename std::enable_if<FHT_IS_SPECIAL(FHT_SPECIAL_TYPES), const uint32_t>::type
-fht_table<K, V, Returner, Hasher, Allocator>::find(key_pass_t key,
-                                                   ret_type_t store_val) const {
+template<typename K, typename V, typename Hasher, typename Allocator>
+template<typename _K, typename _V, typename _Hasher, typename _Allocator>
+typename std::enable_if<FHT_IS_SPECIAL(FHT_SPECIAL_TYPES),
+                        const int8_t * const>::type
+fht_table<K, V, Hasher, Allocator>::_find(key_pass_t key) const {
 
     // seperate version of find
     const uint32_t    _log_incr = this->log_incr;
@@ -1303,34 +1505,24 @@ fht_table<K, V, Returner, Hasher, Allocator>::find(key_pass_t key,
             const uint32_t true_idx = FHT_MM_IDX_MULT * outer_idx + idx;
 
             if ((nodes[true_idx].key == key)) {
-                this->returner.to_ret_type(store_val,
-                                           (V * const)(&(nodes[true_idx].val)));
-                return FHT_FOUND;
+                return ((const int8_t * const)tags) + true_idx;
             }
             slot_mask ^= (1 << idx);
         }
 
         if (__builtin_expect(FHT_MM_EMPTY(tags[outer_idx]), 1)) {
-            return FHT_NOT_FOUND;
+            return NULL;
         }
     }
-    return FHT_NOT_FOUND;
+    return NULL;
 }
 
 //////////////////////////////////////////////////////////////////////
 // remove optimized for larger sizes?
-template<typename K,
-         typename V,
-         typename Returner,
-         typename Hasher,
-         typename Allocator>
-template<typename _K,
-         typename _V,
-         typename _Returner,
-         typename _Hasher,
-         typename _Allocator>
-typename std::enable_if<FHT_IS_SPECIAL(FHT_SPECIAL_TYPES), const uint32_t>::type
-fht_table<K, V, Returner, Hasher, Allocator>::remove(key_pass_t key) const {
+template<typename K, typename V, typename Hasher, typename Allocator>
+template<typename _K, typename _V, typename _Hasher, typename _Allocator>
+typename std::enable_if<FHT_IS_SPECIAL(FHT_SPECIAL_TYPES), uint64_t>::type
+fht_table<K, V, Hasher, Allocator>::erase(key_pass_t key) const {
 
     // same logic as the find function above
     const uint32_t    _log_incr = this->log_incr;
@@ -1361,101 +1553,18 @@ fht_table<K, V, Returner, Hasher, Allocator>::remove(key_pass_t key) const {
             const uint32_t true_idx = FHT_MM_IDX_MULT * outer_idx + idx;
             if ((nodes[true_idx].key == key)) {
                 SET_DELETED(tags8[true_idx]);
-                return FHT_DELETED;
+                return FHT_ERASED;
             }
             slot_mask ^= (1 << idx);
         }
 
         if (__builtin_expect(FHT_MM_EMPTY(tags[outer_idx]), 1)) {
-            return FHT_NOT_DELETED;
+            return FHT_NOT_ERASED;
         }
     }
 
-    return FHT_NOT_DELETED;
+    return FHT_NOT_ERASED;
 }
-//////////////////////////////////////////////////////////////////////
-
-//////////////////////////////////////////////////////////////////////
-// Default classes
-
-// better comments above
-template<typename V>
-struct DEFAULT_RETURNER {
-
-    template<typename _V = V>
-    using _ret_type_t =
-        typename std::conditional<(sizeof(_V) <= FHT_PASS_BY_VAL_THRESH),
-                                  _V * const,
-                                  _V ** const>::type;
-
-    typedef _ret_type_t<V> ret_type_t;
-
-    // this is case where builtin type is passed (imo ptr counts as thats
-    // basically uint64)
-    template<typename _V = V>
-    constexpr typename std::enable_if<(sizeof(_V) <= FHT_PASS_BY_VAL_THRESH),
-                                      void>::type
-    to_ret_type(ret_type_t store_val, V * const val) const {
-        if (store_val) {
-            *store_val = *val;
-        }
-    }
-
-    // this is case where ** is passed (bigger types)
-    template<typename _V = V>
-    constexpr typename std::enable_if<(sizeof(_V) > FHT_PASS_BY_VAL_THRESH),
-                                      void>::type
-    to_ret_type(ret_type_t store_val, V * const val) const {
-        if (store_val) {
-            *store_val = val;
-        }
-    }
-};
-
-template<typename V>
-struct REF_RETURNER {
-
-    template<typename _V = V>
-    using _ret_type_t = V &;
-    typedef _ret_type_t<V> ret_type_t;
-
-    constexpr void
-    to_ret_type(ret_type_t store_val, V const * val) const {
-        store_val = *val;
-    }
-};
-
-// same as ref returner really, just a matter of personal preference
-template<typename V>
-struct PTR_RETURNER {
-
-    template<typename _V = V>
-    using _ret_type_t = V * const;
-    typedef _ret_type_t<V> ret_type_t;
-
-    constexpr void
-    to_ret_type(ret_type_t store_val, V const * val) const {
-        if (store_val) {
-            *store_val = *val;
-        }
-    }
-};
-
-template<typename V>
-struct PTR_PTR_RETURNER {
-
-    template<typename _V = V>
-    using _ret_type_t = V ** const;
-    typedef _ret_type_t<V> ret_type_t;
-
-    constexpr void
-    to_ret_type(ret_type_t store_val, V * const val) const {
-        if (store_val) {
-            *store_val = val;
-        }
-    }
-};
-
 
 //////////////////////////////////////////////////////////////////////
 // Default hash function
@@ -1717,6 +1826,38 @@ myMunmap(void * addr, uint64_t length, const char * fname, const int32_t ln) {
 
 // less syscalls this way
 template<typename K, typename V>
+struct SMALL_INPLACE_MMAP_ALLOC {
+    SMALL_INPLACE_MMAP_ALLOC() {}
+
+    ~SMALL_INPLACE_MMAP_ALLOC() {}
+
+    constexpr fht_chunk<K, V> * const
+    init_mem(const uint64_t size) const {
+        assert(size <= sizeof(fht_chunk<K, V>) *
+                           (FHT_DEFAULT_INIT_MEMORY / sizeof(fht_chunk<K, V>)));
+        return (fht_chunk<K, V> *)myMmap(
+            NULL,
+            sizeof(fht_chunk<K, V>) *
+                (FHT_DEFAULT_INIT_MEMORY / sizeof(fht_chunk<K, V>)),
+            (PROT_READ | PROT_WRITE),
+            (MAP_ANONYMOUS | MAP_PRIVATE | MAP_NORESERVE),
+            (-1),
+            0,
+            __FILE__,
+            __LINE__);
+    }
+
+    constexpr void
+    deinit_mem(fht_chunk<K, V> const * ptr, const size_t size) const {
+        mymunmap((void *)ptr,
+                 sizeof(fht_chunk<K, V>) *
+                     (FHT_DEFAULT_INIT_MEMORY / sizeof(fht_chunk<K, V>)));
+    }
+};
+
+
+// less syscalls this way
+template<typename K, typename V>
 struct INPLACE_MMAP_ALLOC {
 
     uint32_t          cur_size;
@@ -1782,7 +1923,6 @@ struct DEFAULT_MMAP_ALLOC {
         mymunmap(ptr, size * sizeof(fht_chunk<K, V>));
     }
 };
-
 
 #ifdef USING_LOCAL_MMAP
 #undef mymmap_alloc
