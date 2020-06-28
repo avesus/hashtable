@@ -36,10 +36,8 @@ const uint32_t FHT_DELETED     = 1;
 
 
 // tunable
-#define DESTROYABLE_INSERT
-#define V0
+//#define DESTROYABLE_INSERT
 #ifdef DESTROYABLE_INSERT
-
 #define SRC_WRAPPER(X) std::move(X)
 #else
 #define SRC_WRAPPER(X) (X)
@@ -925,25 +923,17 @@ fht_table<K, V, Returner, Hasher, Allocator>::resize() {
 
                     if (__builtin_expect(inner_idx != FHT_MM_IDX_MULT, 1)) {
                         const uint32_t true_idx =
-                        FHT_MM_IDX_MULT * outer_idx + inner_idx;
+                            FHT_MM_IDX_MULT * outer_idx + inner_idx;
 
                         ((int8_t * const)new_chunk->tags_vec)[true_idx] = tag;
-#ifdef V0
-                        NEW(K,
-                            new_chunk->nodes.keys[true_idx],
-                            std::move(old_chunk->nodes.keys[j]));
-                        NEW(V,
-                            new_chunk->nodes.vals[true_idx],
-                            std::move(old_chunk->nodes.vals[j]));
-#elif defined V1
 
                         NEW(K,
-                            new_chunk->nodes.nodes[true_idx].key,
-                            std::move(old_chunk->nodes.nodes[j].key));
+                            *(new_chunk->get_key_n_ptr(true_idx)),
+                            std::move(*(old_chunk->get_key_n_ptr(j))));
                         NEW(V,
-                            new_chunk->nodes.nodes[true_idx].val,
-                            std::move(old_chunk->nodes.nodes[j].val));
-#endif
+                            *(new_chunk->get_val_n_ptr(true_idx)),
+                            std::move(*(old_chunk->get_val_n_ptr(j))));
+
 
 
                         new_starts += (1 << (8 * outer_idx));
@@ -997,23 +987,13 @@ fht_table<K, V, Returner, Hasher, Allocator>::resize() {
                 old_chunk->set_tag_n(true_idx,
                                      old_chunk->get_tag_n(to_move_idx));
 
-#ifdef V0
-                NEW(K,
-                    old_chunk->nodes.keys[true_idx],
-                    std::move(old_chunk->nodes.keys[to_move_idx]));
 
-                NEW(V,
-                    old_chunk->nodes.vals[true_idx],
-                    std::move(old_chunk->nodes.vals[to_move_idx]));
-#elif defined V1
                 NEW(K,
-                    old_chunk->nodes.nodes[true_idx].key,
-                    std::move(old_chunk->nodes.nodes[to_move_idx].key));
-
+                    *(old_chunk->get_key_n_ptr(true_idx)),
+                    std::move(*(old_chunk->get_key_n_ptr(to_move_idx))));
                 NEW(V,
-                    old_chunk->nodes.nodes[true_idx].val,
-                    std::move(old_chunk->nodes.nodes[to_move_idx].val));
-#endif
+                    *(old_chunk->get_val_n_ptr(true_idx)),
+                    std::move(*(old_chunk->get_val_n_ptr(to_move_idx))));
 
 
                 old_chunk->set_tag_n(to_move_idx, INVALID_MASK);
