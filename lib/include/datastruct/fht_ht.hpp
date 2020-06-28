@@ -825,14 +825,16 @@ struct fht_table {
         return count(key);
     }
 
-        V & at(const K & key) {
+    V &
+    at(const K & key) {
         const uint64_t                res   = (const uint64_t)_find(key);
         const fht_chunk<K, V> * const chunk = (const fht_chunk<K, V> * const)(
             res & (~(FHT_NODES_PER_CACHE_LINE - 1)));
         return *(chunk->get_val_ptr_n(res & (FHT_NODES_PER_CACHE_LINE - 1)));
     }
 
-    V & at(K && key) {
+    V &
+    at(K && key) {
         const uint64_t                res   = (const uint64_t)_find(key);
         const fht_chunk<K, V> * const chunk = (const fht_chunk<K, V> * const)(
             res & (~(FHT_NODES_PER_CACHE_LINE - 1)));
@@ -846,7 +848,6 @@ struct fht_table {
     V & operator[](K && key) {
         return at(key);
     }
-
 
 
     //////////////////////////////////////////////////////////////////////
