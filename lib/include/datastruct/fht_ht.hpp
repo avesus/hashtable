@@ -267,69 +267,44 @@ struct fht_chunk {
     __m128i tags_vec[FHT_MM_LINE];
     node_t  nodes;
 
-    //////////////////////////////////////////////////////////////////////
-    // define these new operators because everything is going inplace
-    inline constexpr void *
-    operator new(size_t size, void * ptr) {
-        return ptr;
-    }
-
-    inline constexpr void *
-    operator new[](size_t size, void * ptr) {
-        return ptr;
-    }
-
-    constexpr void
-    operator delete(void * ptr, const uint32_t size) {
-        // do nothing... deinit_mem is explicitly called
-    }
-
-    constexpr void
-    operator delete[](void * ptr, const uint32_t size) {
-        // do nothing... deinit_mem is explicitly called
-    }
-    //////////////////////////////////////////////////////////////////////
-
-
-    inline constexpr uint32_t
+    inline constexpr uint32_t __attribute__((always_inline))
     get_del(const uint32_t idx) {
         return FHT_MM_EMPTY_OR_DEL(this->tags_vec[idx]);
     }
 
-    inline constexpr uint32_t
+    inline constexpr uint32_t __attribute__((always_inline))
     get_empty_or_del(const uint32_t idx) {
         return FHT_MM_EMPTY_OR_DEL(this->tags_vec[idx]);
     }
 
-    inline constexpr uint32_t
+    inline constexpr uint32_t __attribute__((always_inline))
     get_empty(const uint32_t idx) {
         return FHT_MM_EMPTY(this->tags_vec[idx]);
     }
 
-    inline constexpr uint32_t
+    inline constexpr uint32_t __attribute__((always_inline))
     is_deleted_n(const uint32_t n) {
         return IS_DELETED(((const int8_t * const)this->tags_vec)[n]);
     }
 
-    inline constexpr uint32_t
+    inline constexpr uint32_t __attribute__((always_inline))
     is_invalid_n(const uint32_t n) {
         return IS_INVALID(((const int8_t * const)this->tags_vec)[n]);
     }
 
-    inline void
-    delete_tag_n(const uint32_t n) {
+    inline void __attribute__((always_inline)) delete_tag_n(const uint32_t n) {
         SET_DELETED(((int8_t * const)this->tags_vec)[n]);
     }
 
     // this undeletes
-    inline void
+    inline void __attribute__((always_inline))
     set_tag_n(const uint32_t n, const int8_t new_tag) {
         ((int8_t * const)this->tags_vec)[n] = new_tag;
     }
 
 
     // the following exist for key/val in a far more complicated format
-    inline constexpr const int8_t
+    inline constexpr const int8_t __attribute__((always_inline))
     get_tag_n(const uint32_t n) const {
         return ((int8_t * const)this->tags_vec)[n];
     }
@@ -342,7 +317,7 @@ struct fht_chunk {
     inline constexpr
         typename std::enable_if<(FHT_NOT_SPECIAL(FHT_SPECIAL_TYPES) &&
                                  sizeof(_K) <= FHT_SEPERATE_THRESH),
-                                key_pass_t>::type
+                                key_pass_t>::type __attribute__((always_inline))
         get_key_n(const uint32_t n) const {
         return this->nodes.keys[n];
     }
@@ -352,6 +327,7 @@ struct fht_chunk {
         typename std::enable_if<(FHT_NOT_SPECIAL(FHT_SPECIAL_TYPES) &&
                                  sizeof(_K) <= FHT_SEPERATE_THRESH),
                                 const uint32_t>::type
+        __attribute__((always_inline))
         compare_key_n(const uint32_t n, key_pass_t other_key) const {
         return this->nodes.keys[n] == other_key;
     }
@@ -360,7 +336,7 @@ struct fht_chunk {
     inline constexpr
         typename std::enable_if<(FHT_NOT_SPECIAL(FHT_SPECIAL_TYPES) &&
                                  sizeof(_K) <= FHT_SEPERATE_THRESH),
-                                val_pass_t>::type
+                                val_pass_t>::type __attribute__((always_inline))
         get_val_n(const uint32_t n) const {
         return this->nodes.vals[n];
     }
@@ -371,7 +347,7 @@ struct fht_chunk {
         typename std::enable_if<(FHT_NOT_SPECIAL(FHT_SPECIAL_TYPES) &&
                                  sizeof(_K) <= FHT_SEPERATE_THRESH),
                                 const K * const>::type
-        get_key_n_ptr(const uint32_t n) const {
+        __attribute__((always_inline)) get_key_n_ptr(const uint32_t n) const {
         return (const K * const)(&(this->nodes.keys[n]));
     }
 
@@ -380,7 +356,7 @@ struct fht_chunk {
         typename std::enable_if<(FHT_NOT_SPECIAL(FHT_SPECIAL_TYPES) &&
                                  sizeof(_K) <= FHT_SEPERATE_THRESH),
                                 V * const>::type
-        get_val_n_ptr(const uint32_t n) const {
+        __attribute__((always_inline)) get_val_n_ptr(const uint32_t n) const {
         return (V * const)(&(this->nodes.vals[n]));
     }
 
@@ -388,7 +364,7 @@ struct fht_chunk {
     inline typename std::enable_if<(FHT_NOT_SPECIAL(FHT_SPECIAL_TYPES) &&
                                     sizeof(_K) <= FHT_SEPERATE_THRESH &&
                                     sizeof(_V) <= FHT_PASS_BY_VAL_THRESH),
-                                   void>::type
+                                   void>::type __attribute__((always_inline))
     set_key_val_tag(const uint32_t n,
                     const int8_t   tag,
                     key_pass_t     new_key,
@@ -404,7 +380,7 @@ struct fht_chunk {
     inline typename std::enable_if<(FHT_NOT_SPECIAL(FHT_SPECIAL_TYPES) &&
                                     sizeof(_K) <= FHT_SEPERATE_THRESH &&
                                     sizeof(_V) > FHT_PASS_BY_VAL_THRESH),
-                                   void>::type
+                                   void>::type __attribute__((always_inline))
     set_key_val_tag(const uint32_t n,
                     const int8_t   tag,
                     key_pass_t     new_key,
@@ -418,7 +394,7 @@ struct fht_chunk {
     inline typename std::enable_if<(FHT_NOT_SPECIAL(FHT_SPECIAL_TYPES) &&
                                     sizeof(_K) <= FHT_SEPERATE_THRESH &&
                                     sizeof(_V) > FHT_PASS_BY_VAL_THRESH),
-                                   void>::type
+                                   void>::type __attribute__((always_inline))
     set_key_val_tag(const uint32_t n,
                     const int8_t   tag,
                     key_pass_t     new_key,
@@ -432,7 +408,7 @@ struct fht_chunk {
     inline typename std::enable_if<(FHT_NOT_SPECIAL(FHT_SPECIAL_TYPES) &&
                                     sizeof(_K) <= FHT_SEPERATE_THRESH &&
                                     sizeof(_V) > FHT_PASS_BY_VAL_THRESH),
-                                   void>::type
+                                   void>::type __attribute__((always_inline))
     set_key_val_tag(const uint32_t n,
                     const int8_t   tag,
                     key_pass_t     new_key,
@@ -449,7 +425,7 @@ struct fht_chunk {
     inline constexpr
         typename std::enable_if<(FHT_IS_SPECIAL(FHT_SPECIAL_TYPES) ||
                                  sizeof(_K) > FHT_SEPERATE_THRESH),
-                                key_pass_t>::type
+                                key_pass_t>::type __attribute__((always_inline))
         get_key_n(const uint32_t n) const {
         return this->nodes.nodes[n].key;
     }
@@ -459,6 +435,7 @@ struct fht_chunk {
         typename std::enable_if<(FHT_IS_SPECIAL(FHT_SPECIAL_TYPES) ||
                                  sizeof(_K) > FHT_SEPERATE_THRESH),
                                 const uint32_t>::type
+        __attribute__((always_inline))
         compare_key_n(const uint32_t n, key_pass_t other_key) const {
         return this->nodes.nodes[n].key == other_key;
     }
@@ -468,7 +445,7 @@ struct fht_chunk {
     inline constexpr
         typename std::enable_if<(FHT_IS_SPECIAL(FHT_SPECIAL_TYPES) ||
                                  sizeof(_K) > FHT_SEPERATE_THRESH),
-                                val_pass_t>::type
+                                val_pass_t>::type __attribute__((always_inline))
         get_val_n(const uint32_t n) const {
         return this->nodes.nodes[n].val;
     }
@@ -478,9 +455,9 @@ struct fht_chunk {
     inline constexpr
         typename std::enable_if<(FHT_IS_SPECIAL(FHT_SPECIAL_TYPES) ||
                                  sizeof(_K) > FHT_SEPERATE_THRESH),
-                                K * const>::type
-        get_key_n_ptr(const uint32_t n) const {
-        return (K * const)(&(this->nodes.nodes[n].key));
+                                const K * const>::type
+        __attribute__((always_inline)) get_key_n_ptr(const uint32_t n) const {
+        return (const K * const)(&(this->nodes.nodes[n].key));
     }
 
     template<typename _K = K, typename _V = V>
@@ -488,7 +465,7 @@ struct fht_chunk {
         typename std::enable_if<(FHT_IS_SPECIAL(FHT_SPECIAL_TYPES) ||
                                  sizeof(_K) > FHT_SEPERATE_THRESH),
                                 V * const>::type
-        get_val_n_ptr(const uint32_t n) const {
+        __attribute__((always_inline)) get_val_n_ptr(const uint32_t n) const {
         return (V * const)(&(this->nodes.nodes[n].val));
     }
 
@@ -497,7 +474,7 @@ struct fht_chunk {
     inline typename std::enable_if<((FHT_IS_SPECIAL(FHT_SPECIAL_TYPES) ||
                                      sizeof(_K) > FHT_SEPERATE_THRESH) &&
                                     sizeof(_V) <= FHT_PASS_BY_VAL_THRESH),
-                                   void>::type
+                                   void>::type __attribute__((always_inline))
     set_key_val_tag(const uint32_t n,
                     const int8_t   tag,
                     key_pass_t     new_key,
@@ -511,7 +488,7 @@ struct fht_chunk {
     inline typename std::enable_if<((FHT_IS_SPECIAL(FHT_SPECIAL_TYPES) ||
                                      sizeof(_K) > FHT_SEPERATE_THRESH) &&
                                     sizeof(_V) > FHT_PASS_BY_VAL_THRESH),
-                                   void>::type
+                                   void>::type __attribute__((always_inline))
     set_key_val_tag(const uint32_t n,
                     const int8_t   tag,
                     key_pass_t     new_key,
@@ -525,7 +502,7 @@ struct fht_chunk {
     inline typename std::enable_if<((FHT_IS_SPECIAL(FHT_SPECIAL_TYPES) ||
                                      sizeof(_K) > FHT_SEPERATE_THRESH) &&
                                     sizeof(_V) > FHT_PASS_BY_VAL_THRESH),
-                                   void>::type
+                                   void>::type __attribute__((always_inline))
     set_key_val_tag(const uint32_t n,
                     const int8_t   tag,
                     key_pass_t     new_key,
@@ -540,7 +517,7 @@ struct fht_chunk {
     inline typename std::enable_if<((FHT_IS_SPECIAL(FHT_SPECIAL_TYPES) ||
                                      sizeof(_K) > FHT_SEPERATE_THRESH) &&
                                     sizeof(_V) > FHT_PASS_BY_VAL_THRESH),
-                                   void>::type
+                                   void>::type __attribute__((always_inline))
     set_key_val_tag(const uint32_t n,
                     const int8_t   tag,
                     key_pass_t     new_key,
