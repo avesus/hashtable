@@ -45,7 +45,7 @@ CC=g++
 
 #debug vs non debug flags
 ifeq ($(DEBUG_MODE), 0)
-CFLAGS=-O3 -std=c++11 -fipa-sra -Wall -Wno-pointer-arith -Wno-unused-function -D_GNU_SOURCE -I$(CONFIG_DIR) -I$(INCLUDE_DIR)
+CFLAGS=-O3 -std=c++11 -fipa-sra -Winline -Wall -Wno-pointer-arith -Wno-unused-function -D_GNU_SOURCE -I$(CONFIG_DIR) -I$(INCLUDE_DIR)
 else
 CFLAGS=-O0 -std=c++11 -Wall -Wno-pointer-arith -Wno-unused-function -g3 -DDEBUG -D_GNU_SOURCE -I$(CONFIG_DIR) -I$(INCLUDE_DIR)
 endif

@@ -34,7 +34,19 @@ const uint32_t FHT_FOUND     = 1;
 const uint32_t FHT_NOT_DELETED = 0;
 const uint32_t FHT_DELETED     = 1;
 
+
 // tunable
+#define DESTROYABLE_INSERT
+#define V0
+#ifdef DESTROYABLE_INSERT
+
+#define SRC_WRAPPER(X) std::move(X)
+#else
+#define SRC_WRAPPER(X) (X)
+#endif
+
+#define NEW(type, dst, src) (new ((void *)(&(dst))) type(src))
+
 
 // when to change pass by from actual value to reference
 #define FHT_PASS_BY_VAL_THRESH 8
@@ -54,8 +66,7 @@ struct _fht_empty_t {};
 
 // max memory willing to use (this doesn't really have effect with default
 // allocator)
-const uint64_t FHT_DEFAULT_INIT_MEMORY   = ((1UL) << 35);
-void * const   FHT_DEFAULT_START_ADDRESS = (void *)((1UL) << 30);
+const uint64_t FHT_DEFAULT_INIT_MEMORY = ((1UL) << 35);
 
 // default init size (since mmap is backend for allocation less than page size
 // has no effect)
@@ -230,6 +241,7 @@ struct fht_combined_kv {
 template<typename K, typename V>
 struct fht_chunk {
 
+
     // determine best way to pass K/V depending on size. Generally passing
     // values machine word size is ill advised
     template<typename T>
@@ -241,7 +253,7 @@ struct fht_chunk {
 
     // determine node type based on K/V
     template<typename _K = K, typename _V = V>
-    using local_node_t =
+    using _node_t =
         typename std::conditional<(FHT_NOT_SPECIAL(FHT_SPECIAL_TYPES) &&
                                    sizeof(_K) <= FHT_SEPERATE_THRESH),
                                   fht_seperate_kv<_K, _V>,
@@ -249,13 +261,37 @@ struct fht_chunk {
 
 
     // typedefs to fht_table can access these variables
-    typedef pass_type_t<K>     key_pass_t;
-    typedef pass_type_t<V>     val_pass_t;
-    typedef local_node_t<K, V> node_t;
+    typedef pass_type_t<K> key_pass_t;
+    typedef pass_type_t<V> val_pass_t;
+    typedef _node_t<K, V>  node_t;
 
     // actual content of chunk
     __m128i tags_vec[FHT_MM_LINE];
     node_t  nodes;
+
+    //////////////////////////////////////////////////////////////////////
+    // define these new operators because everything is going inplace
+    inline constexpr void *
+    operator new(size_t size, void * ptr) {
+        return ptr;
+    }
+
+    inline constexpr void *
+    operator new[](size_t size, void * ptr) {
+        return ptr;
+    }
+
+    constexpr void
+    operator delete(void * ptr, const uint32_t size) {
+        // do nothing... deinit_mem is explicitly called
+    }
+
+    constexpr void
+    operator delete[](void * ptr, const uint32_t size) {
+        // do nothing... deinit_mem is explicitly called
+    }
+    //////////////////////////////////////////////////////////////////////
+
 
     inline constexpr uint32_t
     get_del(const uint32_t idx) {
@@ -336,9 +372,9 @@ struct fht_chunk {
     inline constexpr
         typename std::enable_if<(FHT_NOT_SPECIAL(FHT_SPECIAL_TYPES) &&
                                  sizeof(_K) <= FHT_SEPERATE_THRESH),
-                                K * const>::type
+                                const K * const>::type
         get_key_n_ptr(const uint32_t n) const {
-        return (K * const)(&(this->nodes.keys[n]));
+        return (const K * const)(&(this->nodes.keys[n]));
     }
 
     template<typename _K = K, typename _V = V>
@@ -352,16 +388,60 @@ struct fht_chunk {
 
     template<typename _K = K, typename _V = V>
     inline typename std::enable_if<(FHT_NOT_SPECIAL(FHT_SPECIAL_TYPES) &&
-                                    sizeof(_K) <= FHT_SEPERATE_THRESH),
+                                    sizeof(_K) <= FHT_SEPERATE_THRESH &&
+                                    sizeof(_V) <= FHT_PASS_BY_VAL_THRESH),
                                    void>::type
     set_key_val_tag(const uint32_t n,
+                    const int8_t   tag,
                     key_pass_t     new_key,
-                    val_pass_t     new_val,
-                    const int8_t   tag) {
+                    val_pass_t     new_val) {
 
         ((int8_t * const)this->tags_vec)[n] = tag;
-        this->nodes.keys[n]                 = new_key;
-        this->nodes.vals[n]                 = new_val;
+        NEW(K, this->nodes.keys[n], SRC_WRAPPER(new_key));
+        NEW(V, this->nodes.vals[n], SRC_WRAPPER(new_val));
+    }
+
+
+    template<typename _K = K, typename _V = V, typename... Args>
+    inline typename std::enable_if<(FHT_NOT_SPECIAL(FHT_SPECIAL_TYPES) &&
+                                    sizeof(_K) <= FHT_SEPERATE_THRESH &&
+                                    sizeof(_V) > FHT_PASS_BY_VAL_THRESH),
+                                   void>::type
+    set_key_val_tag(const uint32_t n,
+                    const int8_t   tag,
+                    key_pass_t     new_key,
+                    Args &&... args) {
+        ((int8_t * const)this->tags_vec)[n] = tag;
+        NEW(K, this->nodes.keys[n], SRC_WRAPPER(new_key));
+        NEW(V, this->nodes.vals[n], std::forward<Args>(args)...);
+    }
+
+    template<typename _K = K, typename _V = V>
+    inline typename std::enable_if<(FHT_NOT_SPECIAL(FHT_SPECIAL_TYPES) &&
+                                    sizeof(_K) <= FHT_SEPERATE_THRESH &&
+                                    sizeof(_V) > FHT_PASS_BY_VAL_THRESH),
+                                   void>::type
+    set_key_val_tag(const uint32_t n,
+                    const int8_t   tag,
+                    key_pass_t     new_key,
+                    const V &      new_val) {
+        ((int8_t * const)this->tags_vec)[n] = tag;
+        NEW(K, this->nodes.keys[n], SRC_WRAPPER(new_key));
+        NEW(V, this->nodes.vals[n], SRC_WRAPPER(new_val));
+    }
+
+    template<typename _K = K, typename _V = V>
+    inline typename std::enable_if<(FHT_NOT_SPECIAL(FHT_SPECIAL_TYPES) &&
+                                    sizeof(_K) <= FHT_SEPERATE_THRESH &&
+                                    sizeof(_V) > FHT_PASS_BY_VAL_THRESH),
+                                   void>::type
+    set_key_val_tag(const uint32_t n,
+                    const int8_t   tag,
+                    key_pass_t     new_key,
+                    V &            new_val) {
+        ((int8_t * const)this->tags_vec)[n] = tag;
+        NEW(K, this->nodes.keys[n], SRC_WRAPPER(new_key));
+        NEW(V, this->nodes.vals[n], SRC_WRAPPER(new_val));
     }
 
 
@@ -416,16 +496,60 @@ struct fht_chunk {
 
 
     template<typename _K = K, typename _V = V>
-    inline typename std::enable_if<(FHT_IS_SPECIAL(FHT_SPECIAL_TYPES) ||
-                                    sizeof(_K) > FHT_SEPERATE_THRESH),
+    inline typename std::enable_if<((FHT_IS_SPECIAL(FHT_SPECIAL_TYPES) ||
+                                     sizeof(_K) > FHT_SEPERATE_THRESH) &&
+                                    sizeof(_V) <= FHT_PASS_BY_VAL_THRESH),
                                    void>::type
     set_key_val_tag(const uint32_t n,
+                    const int8_t   tag,
                     key_pass_t     new_key,
-                    val_pass_t     new_val,
-                    const int8_t   tag) {
+                    val_pass_t     new_val) {
         ((int8_t * const)this->tags_vec)[n] = tag;
-        this->nodes.nodes[n].key            = new_key;
-        this->nodes.nodes[n].val            = new_val;
+        NEW(K, this->nodes.nodes[n].key, SRC_WRAPPER(new_key));
+        NEW(V, this->nodes.nodes[n].val, SRC_WRAPPER(new_val));
+    }
+
+    template<typename _K = K, typename _V = V, typename... Args>
+    inline typename std::enable_if<((FHT_IS_SPECIAL(FHT_SPECIAL_TYPES) ||
+                                     sizeof(_K) > FHT_SEPERATE_THRESH) &&
+                                    sizeof(_V) > FHT_PASS_BY_VAL_THRESH),
+                                   void>::type
+    set_key_val_tag(const uint32_t n,
+                    const int8_t   tag,
+                    key_pass_t     new_key,
+                    Args &&... args) {
+        ((int8_t * const)this->tags_vec)[n] = tag;
+        NEW(K, this->nodes.nodes[n].key, SRC_WRAPPER(new_key));
+        NEW(V, this->nodes.nodes[n].val, std::forward<Args>(args)...);
+    }
+
+    template<typename _K = K, typename _V = V>
+    inline typename std::enable_if<((FHT_IS_SPECIAL(FHT_SPECIAL_TYPES) ||
+                                     sizeof(_K) > FHT_SEPERATE_THRESH) &&
+                                    sizeof(_V) > FHT_PASS_BY_VAL_THRESH),
+                                   void>::type
+    set_key_val_tag(const uint32_t n,
+                    const int8_t   tag,
+                    key_pass_t     new_key,
+                    const V &      new_val) {
+
+        ((int8_t * const)this->tags_vec)[n] = tag;
+        NEW(K, this->nodes.nodes[n].key, SRC_WRAPPER(new_key));
+        NEW(V, this->nodes.nodes[n].val, SRC_WRAPPER(new_val));
+    }
+
+    template<typename _K = K, typename _V = V>
+    inline typename std::enable_if<((FHT_IS_SPECIAL(FHT_SPECIAL_TYPES) ||
+                                     sizeof(_K) > FHT_SEPERATE_THRESH) &&
+                                    sizeof(_V) > FHT_PASS_BY_VAL_THRESH),
+                                   void>::type
+    set_key_val_tag(const uint32_t n,
+                    const int8_t   tag,
+                    key_pass_t     new_key,
+                    V &            new_val) {
+        ((int8_t * const)this->tags_vec)[n] = tag;
+        NEW(K, this->nodes.nodes[n].key, SRC_WRAPPER(new_key));
+        NEW(V, this->nodes.nodes[n].val, SRC_WRAPPER(new_val));
     }
 };
 //////////////////////////////////////////////////////////////////////
@@ -436,6 +560,7 @@ template<typename K,
          typename Hasher    = DEFAULT_HASH_64<K>,
          typename Allocator = INPLACE_MMAP_ALLOC<K, V>>
 class fht_table {
+
 
     // log of table size
     uint32_t log_incr;
@@ -485,7 +610,127 @@ class fht_table {
     ~fht_table();
 
     // add new key value pair
-    const uint32_t add(key_pass_t new_key, val_pass_t new_val);
+
+
+    template<typename... Args>
+    const uint32_t
+    add(key_pass_t new_key, Args &&... args) {
+
+        // get all derferncing of this out of the way
+        const uint32_t          _log_incr = this->log_incr;
+        const hash_type_t       raw_slot  = this->hash(new_key);
+        fht_chunk<K, V> * const chunk     = (fht_chunk<K, V> * const)(
+            (this->chunks) + (HASH_TO_IDX(raw_slot, _log_incr)));
+
+        __builtin_prefetch(chunk);
+
+        // get tag and start_idx from raw_slot
+        const int8_t   tag       = GEN_TAG(raw_slot);
+        const __m128i  tag_match = FHT_MM_SET(tag);
+        const uint32_t start_idx = GEN_START_IDX(raw_slot);
+
+        // prefetch is nice for performance here
+        if (FHT_IS_SPECIAL_(FHT_SPECIAL_TYPES)) {
+            __builtin_prefetch(
+                chunk->get_key_n_ptr((FHT_MM_IDX_MULT * start_idx)));
+        }
+
+        // check for valid slot or duplicate
+        uint32_t idx, slot_mask, del_idx = FHT_NODES_PER_CACHE_LINE;
+        for (uint32_t j = 0; j < FHT_MM_LINE; j++) {
+            const uint32_t outer_idx = (j + start_idx) & FHT_MM_LINE_MASK;
+
+            slot_mask = FHT_MM_MASK(tag_match, chunk->tags_vec[outer_idx]);
+            while (slot_mask) {
+                __asm__("tzcnt %1, %0" : "=r"((idx)) : "rm"((slot_mask)));
+                const uint32_t true_idx = FHT_MM_IDX_MULT * outer_idx + idx;
+
+                if (__builtin_expect((chunk->compare_key_n(true_idx, new_key)),
+                                     1)) {
+
+                    return FHT_NOT_ADDED;
+                }
+
+                slot_mask ^= (1 << idx);
+            }
+
+            // we always go here 1st loop (where most add calls find a slot) and
+            // if no deleted elements alwys go here as well
+            if (__builtin_expect(del_idx & FHT_NODES_PER_CACHE_LINE, 1)) {
+                const uint32_t _slot_mask = chunk->get_empty_or_del(outer_idx);
+                if (__builtin_expect(_slot_mask, 1)) {
+                    __asm__("tzcnt %1, %0" : "=r"((idx)) : "rm"((_slot_mask)));
+                    const uint32_t true_idx = FHT_MM_IDX_MULT * outer_idx + idx;
+
+                    // some tunable param here would be useful
+                    if (chunk->is_deleted_n(true_idx)) {
+                        // even though this adds an operation it avoids worst
+                        // case where alot of deleted items = unnecissary
+                        // iterations. 2 iterations approx = this cost.
+                        if (chunk->get_empty(outer_idx)) {
+                            chunk->set_key_val_tag(true_idx,
+                                                   tag,
+                                                   new_key,
+                                                   std::forward<Args>(args)...);
+
+                            return FHT_ADDED;
+                        }
+
+                        del_idx = true_idx;
+                    }
+                    else {
+                        chunk->set_key_val_tag(true_idx,
+                                               tag,
+                                               new_key,
+                                               std::forward<Args>(args)...);
+                        return FHT_ADDED;
+                    }
+                }
+            }
+            else if (chunk->get_empty(outer_idx)) {
+                chunk->set_key_val_tag(del_idx,
+                                       tag,
+                                       new_key,
+                                       std::forward<Args>(args)...);
+                return FHT_ADDED;
+            }
+        }
+
+        if (del_idx != FHT_NODES_PER_CACHE_LINE) {
+            chunk->set_key_val_tag(del_idx,
+                                   tag,
+                                   new_key,
+                                   std::forward<Args>(args)...);
+
+            return FHT_ADDED;
+        }
+
+        // no valid slot found so resize
+        this->resize();
+
+        fht_chunk<K, V> * const new_chunk = (fht_chunk<K, V> * const)(
+            this->chunks + HASH_TO_IDX(raw_slot, _log_incr + 1));
+
+
+        // after resize add without duplication check
+        for (uint32_t j = 0; j < FHT_MM_LINE; j++) {
+            const uint32_t outer_idx  = (j + start_idx) & FHT_MM_LINE_MASK;
+            const uint32_t _slot_mask = new_chunk->get_empty(outer_idx);
+
+            if (__builtin_expect(_slot_mask, 1)) {
+                __asm__("tzcnt %1, %0" : "=r"((idx)) : "rm"((_slot_mask)));
+                new_chunk->set_key_val_tag(FHT_MM_IDX_MULT * outer_idx + idx,
+                                           tag,
+                                           new_key,
+                                           std::forward<Args>(args)...);
+
+
+                return FHT_ADDED;
+            }
+        }
+        // probability of this is 1 / (2 ^ 64)
+        assert(0);
+    }
 
     // NOT_SPECIAL type find/remove
     template<typename _K         = K,
@@ -672,18 +917,35 @@ fht_table<K, V, Returner, Hasher, Allocator>::resize() {
                 old_chunk->set_tag_n(j, INVALID_MASK);
 
                 // place new node w.o duplicate check
-
                 for (uint32_t new_j = 0; new_j < FHT_MM_LINE; new_j++) {
                     const uint32_t outer_idx =
                         (new_j + start_idx) & FHT_MM_LINE_MASK;
                     const uint32_t inner_idx =
                         (new_starts >> (8 * outer_idx)) & 0xff;
+
                     if (__builtin_expect(inner_idx != FHT_MM_IDX_MULT, 1)) {
-                        new_chunk->set_key_val_tag(
-                            FHT_MM_IDX_MULT * outer_idx + inner_idx,
-                            old_chunk->get_key_n(j),
-                            old_chunk->get_val_n(j),
-                            tag);
+                        const uint32_t true_idx =
+                        FHT_MM_IDX_MULT * outer_idx + inner_idx;
+
+                        ((int8_t * const)new_chunk->tags_vec)[true_idx] = tag;
+#ifdef V0
+                        NEW(K,
+                            new_chunk->nodes.keys[true_idx],
+                            std::move(old_chunk->nodes.keys[j]));
+                        NEW(V,
+                            new_chunk->nodes.vals[true_idx],
+                            std::move(old_chunk->nodes.vals[j]));
+#elif defined V1
+
+                        NEW(K,
+                            new_chunk->nodes.nodes[true_idx].key,
+                            std::move(old_chunk->nodes.nodes[j].key));
+                        NEW(V,
+                            new_chunk->nodes.nodes[true_idx].val,
+                            std::move(old_chunk->nodes.nodes[j].val));
+#endif
+
+
                         new_starts += (1 << (8 * outer_idx));
                         break;
                     }
@@ -729,10 +991,30 @@ fht_table<K, V, Returner, Hasher, Allocator>::resize() {
                         : "rm"((~old_start_pos[j])));
 
                 old_start_to_move[j] ^= ((1UL) << to_move_idx);
-                old_chunk->set_key_val_tag(FHT_MM_IDX_MULT * j + to_place_idx,
-                                           old_chunk->get_key_n(to_move_idx),
-                                           old_chunk->get_val_n(to_move_idx),
-                                           old_chunk->get_tag_n(to_move_idx));
+
+                const uint32_t true_idx = FHT_MM_IDX_MULT * j + to_place_idx;
+
+                old_chunk->set_tag_n(true_idx,
+                                     old_chunk->get_tag_n(to_move_idx));
+
+#ifdef V0
+                NEW(K,
+                    old_chunk->nodes.keys[true_idx],
+                    std::move(old_chunk->nodes.keys[to_move_idx]));
+
+                NEW(V,
+                    old_chunk->nodes.vals[true_idx],
+                    std::move(old_chunk->nodes.vals[to_move_idx]));
+#elif defined V1
+                NEW(K,
+                    old_chunk->nodes.nodes[true_idx].key,
+                    std::move(old_chunk->nodes.nodes[to_move_idx].key));
+
+                NEW(V,
+                    old_chunk->nodes.nodes[true_idx].val,
+                    std::move(old_chunk->nodes.nodes[to_move_idx].val));
+#endif
+
 
                 old_chunk->set_tag_n(to_move_idx, INVALID_MASK);
 
@@ -864,9 +1146,10 @@ fht_table<K, V, Returner, Hasher, Allocator>::resize() {
 
                     new_chunk->set_key_val_tag(
                         FHT_MM_IDX_MULT * outer_idx + inner_idx,
+
+                        old_chunk->get_tag_n(j),
                         old_chunk->get_key_n(j),
-                        old_chunk->get_val_n(j),
-                        old_chunk->get_tag_n(j));
+                        old_chunk->get_val_n(j));
 
 
                     slot_idx += ((1UL) << (8 * outer_idx + 32 * nth_bit));
@@ -897,116 +1180,6 @@ fht_table<K, V, Returner, Hasher, Allocator>::resize() {
 }
 
 
-//////////////////////////////////////////////////////////////////////
-// Add Key Val
-template<typename K,
-         typename V,
-         typename Returner,
-         typename Hasher,
-         typename Allocator>
-const uint32_t
-fht_table<K, V, Returner, Hasher, Allocator>::add(key_pass_t new_key,
-                                                  val_pass_t new_val) {
-
-    // get all derferncing of this out of the way
-    const uint32_t          _log_incr = this->log_incr;
-    const hash_type_t       raw_slot  = this->hash(new_key);
-    fht_chunk<K, V> * const chunk     = (fht_chunk<K, V> * const)(
-        (this->chunks) + (HASH_TO_IDX(raw_slot, _log_incr)));
-
-    __builtin_prefetch(chunk);
-
-    // get tag and start_idx from raw_slot
-    const int8_t   tag       = GEN_TAG(raw_slot);
-    const __m128i  tag_match = FHT_MM_SET(tag);
-    const uint32_t start_idx = GEN_START_IDX(raw_slot);
-
-    // prefetch is nice for performance here
-    if (FHT_IS_SPECIAL_(FHT_SPECIAL_TYPES)) {
-        __builtin_prefetch(chunk->get_key_n_ptr((FHT_MM_IDX_MULT * start_idx)));
-    }
-
-    // check for valid slot or duplicate
-    uint32_t idx, slot_mask, del_idx = FHT_NODES_PER_CACHE_LINE;
-    for (uint32_t j = 0; j < FHT_MM_LINE; j++) {
-        const uint32_t outer_idx = (j + start_idx) & FHT_MM_LINE_MASK;
-
-        slot_mask = FHT_MM_MASK(tag_match, chunk->tags_vec[outer_idx]);
-        while (slot_mask) {
-            __asm__("tzcnt %1, %0" : "=r"((idx)) : "rm"((slot_mask)));
-            const uint32_t true_idx = FHT_MM_IDX_MULT * outer_idx + idx;
-
-            if (__builtin_expect((chunk->compare_key_n(true_idx, new_key)),
-                                 1)) {
-
-                return FHT_NOT_ADDED;
-            }
-
-            slot_mask ^= (1 << idx);
-        }
-
-        // we always go here 1st loop (where most add calls find a slot) and if
-        // no deleted elements alwys go here as well
-        if (__builtin_expect(del_idx & FHT_NODES_PER_CACHE_LINE, 1)) {
-            const uint32_t _slot_mask = chunk->get_empty_or_del(outer_idx);
-            if (__builtin_expect(_slot_mask, 1)) {
-                __asm__("tzcnt %1, %0" : "=r"((idx)) : "rm"((_slot_mask)));
-                const uint32_t true_idx = FHT_MM_IDX_MULT * outer_idx + idx;
-
-                // some tunable param here would be useful
-                if (chunk->is_deleted_n(true_idx)) {
-                    // even though this adds an operation it avoids worst case
-                    // where alot of deleted items = unnecissary iterations. 2
-                    // iterations approx = this cost.
-                    if (chunk->get_empty(outer_idx)) {
-                        chunk->set_key_val_tag(true_idx, new_key, new_val, tag);
-                        return FHT_ADDED;
-                    }
-
-                    del_idx = true_idx;
-                }
-                else {
-                    chunk->set_key_val_tag(true_idx, new_key, new_val, tag);
-                    return FHT_ADDED;
-                }
-            }
-        }
-        else if (chunk->get_empty(outer_idx)) {
-            chunk->set_key_val_tag(del_idx, new_key, new_val, tag);
-            return FHT_ADDED;
-        }
-    }
-
-    if (del_idx != FHT_NODES_PER_CACHE_LINE) {
-        chunk->set_key_val_tag(del_idx, new_key, new_val, tag);
-        return FHT_ADDED;
-    }
-
-    // no valid slot found so resize
-    this->resize();
-
-    fht_chunk<K, V> * const new_chunk = (fht_chunk<K, V> * const)(
-        this->chunks + HASH_TO_IDX(raw_slot, _log_incr + 1));
-
-
-    // after resize add without duplication check
-    for (uint32_t j = 0; j < FHT_MM_LINE; j++) {
-        const uint32_t outer_idx  = (j + start_idx) & FHT_MM_LINE_MASK;
-        const uint32_t _slot_mask = new_chunk->get_empty(outer_idx);
-
-        if (__builtin_expect(_slot_mask, 1)) {
-            __asm__("tzcnt %1, %0" : "=r"((idx)) : "rm"((_slot_mask)));
-
-            new_chunk->set_key_val_tag(FHT_MM_IDX_MULT * outer_idx + idx,
-                                       new_key,
-                                       new_val,
-                                       tag);
-            return FHT_ADDED;
-        }
-    }
-    // probability of this is 1 / (2 ^ 64)
-    assert(0);
-}
 //////////////////////////////////////////////////////////////////////
 // Find
 template<typename K,
@@ -1589,44 +1762,6 @@ myMunmap(void * addr, uint64_t length, const char * fname, const int32_t ln) {
 
 // less syscalls this way
 template<typename K, typename V>
-struct OPTIMIZED_MMAP_ALLOC {
-
-    size_t start_offset;
-    void * base_address;
-    OPTIMIZED_MMAP_ALLOC() {
-        this->base_address = (fht_chunk<K, V> *)myMmap(
-            NULL,
-            FHT_DEFAULT_INIT_MEMORY,
-            (PROT_READ | PROT_WRITE),
-            (MAP_ANONYMOUS | MAP_PRIVATE | MAP_NORESERVE),
-            (-1),
-            0,
-            __FILE__,
-            __LINE__);
-
-        this->start_offset = 0;
-    }
-    ~OPTIMIZED_MMAP_ALLOC() {
-        mymunmap(this->base_address, FHT_DEFAULT_INIT_MEMORY);
-    }
-
-    fht_chunk<K, V> * const
-    init_mem(const size_t size) {
-        const size_t old_start_offset = this->start_offset;
-        this->start_offset +=
-            PAGE_SIZE *
-            ((size * sizeof(fht_chunk<K, V>) + PAGE_SIZE - 1) / PAGE_SIZE);
-
-        return (fht_chunk<K, V> * const)(this->base_address + old_start_offset);
-    }
-    void
-    deinit_mem(fht_chunk<K, V> * const ptr, const size_t size) const {
-        return;
-    }
-};
-
-// less syscalls this way
-template<typename K, typename V>
 struct INPLACE_MMAP_ALLOC {
 
     uint32_t          cur_size;
@@ -1651,31 +1786,7 @@ struct INPLACE_MMAP_ALLOC {
         mymunmap(this->base_address, this->cur_size);
     }
 
-    constexpr void *
-    operator new(size_t size, void * ptr) {
-        return ptr;
-    }
-    constexpr void *
-    operator new[](size_t size, void * ptr) {
-        return ptr;
-    }
-
-    constexpr void
-    operator delete(void * ptr, const uint32_t size) {
-        // do nothing... deinit_mem is explicitly called
-    }
-
-    constexpr void
-    operator delete[](void * ptr, const uint32_t size) {
-        // do nothing... deinit_mem is explicitly called
-    }
-
-
-    template<typename _K = K, typename _V = V>
-    typename std::enable_if<
-        (std::is_arithmetic<_K>::value || std::is_pointer<_K>::value) &&
-            (std::is_arithmetic<_V>::value || std::is_pointer<_V>::value),
-        fht_chunk<K, V> * const>::type
+    fht_chunk<K, V> * const
     init_mem(const size_t size) {
         const size_t old_start_offset = this->start_offset;
         this->start_offset += size;
@@ -1695,156 +1806,28 @@ struct INPLACE_MMAP_ALLOC {
         return (fht_chunk<K, V> * const)(this->base_address + old_start_offset);
     }
 
-    template<typename _K = K, typename _V = V>
-    constexpr typename std::enable_if<
-        (std::is_arithmetic<_K>::value || std::is_pointer<_K>::value) &&
-            (std::is_arithmetic<_V>::value || std::is_pointer<_V>::value),
-        void>::type
+    void
     deinit_mem(fht_chunk<K, V> * const ptr, const size_t size) const {
         return;
-    }
-
-    template<typename _K = K, typename _V = V>
-    typename std::enable_if<
-        (!(std::is_arithmetic<_K>::value || std::is_pointer<_K>::value)) ||
-            (!(std::is_arithmetic<_V>::value || std::is_pointer<_V>::value)),
-        fht_chunk<K, V> * const>::type
-    init_mem(const size_t size) {
-        const size_t old_start_offset = this->start_offset;
-        this->start_offset += size;
-        if (this->start_offset >= this->cur_size) {
-            // maymove breaks inplace so no flags
-            if (MAP_FAILED ==
-                mremap((void *)this->base_address,
-                       sizeof(fht_chunk<K, V>) * this->cur_size,
-                       2 * sizeof(fht_chunk<K, V>) * this->cur_size,
-                       0)) {
-                assert(0);
-            }
-            this->cur_size = 2 * this->cur_size;
-        }
-        return (fht_chunk<K, V> * const) new (
-            this->base_address + old_start_offset) fht_chunk<K, V>[size];
-    }
-    template<typename _K = K, typename _V = V>
-    constexpr typename std::enable_if<
-        (!(std::is_arithmetic<_K>::value || std::is_pointer<_K>::value)) ||
-            (!(std::is_arithmetic<_V>::value || std::is_pointer<_V>::value)),
-        void>::type
-    deinit_mem(fht_chunk<K, V> * const ptr, const size_t size) const {
-        return;
-    }
-};
-
-
-template<typename K, typename V>
-struct MMAP_ALLOC {
-
-    fht_chunk<K, V> * const
-    init_mem(const size_t size) const {
-        return (fht_chunk<K, V> * const)mymmap_alloc(
-            NULL,
-            size * sizeof(fht_chunk<K, V>));
-    }
-    void
-    deinit_mem(fht_chunk<K, V> * const ptr, const size_t size) const {
-        mymunmap(ptr, size * sizeof(fht_chunk<K, V>));
-    }
-};
-
-template<typename K, typename V>
-struct NEW_MMAP_ALLOC {
-    void *
-    operator new(size_t size) {
-        return mymmap_alloc(NULL, size);
-    }
-    void *
-    operator new[](size_t size) {
-        return mymmap_alloc(NULL, size);
-    }
-
-    void
-    operator delete(void * ptr, const size_t size) {
-        mymunmap(ptr, size);
-    }
-
-    void
-    operator delete[](void * ptr, const size_t size) {
-        mymunmap(ptr, size);
-    }
-
-    fht_chunk<K, V> * const
-    init_mem(const size_t size) const {
-        return new fht_chunk<K, V>[size];
-    }
-    void
-    deinit_mem(fht_chunk<K, V> * const ptr, const size_t size) const {
-        delete[] ptr;
     }
 };
 
 
 template<typename K, typename V>
 struct DEFAULT_MMAP_ALLOC {
-    void *
-    operator new(size_t size) {
-        return mymmap_alloc(NULL, size);
-    }
-    void *
-    operator new[](size_t size) {
-        return mymmap_alloc(NULL, size);
-    }
 
-    void
-    operator delete(void * ptr, const size_t size) {
-        mymunmap(ptr, size);
-    }
-
-    void
-    operator delete[](void * ptr, const size_t size) {
-        mymunmap(ptr, size);
-    }
-
-    // basically if we need constructor to be called we go to the overloaded
-    // new version. These are slower for simply types that can be
-    // initialized with just memset. For those types our init mem is
-    // compiled to just mmap.
-    template<typename _K = K, typename _V = V>
-    typename std::enable_if<
-        (std::is_arithmetic<_K>::value || std::is_pointer<_K>::value) &&
-            (std::is_arithmetic<_V>::value || std::is_pointer<_V>::value),
-        fht_chunk<K, V> * const>::type
+    fht_chunk<K, V> * const
     init_mem(const size_t size) const {
         return (fht_chunk<K, V> * const)mymmap_alloc(
             NULL,
             size * sizeof(fht_chunk<K, V>));
     }
-    template<typename _K = K, typename _V = V>
-    typename std::enable_if<
-        (std::is_arithmetic<_K>::value || std::is_pointer<_K>::value) &&
-            (std::is_arithmetic<_V>::value || std::is_pointer<_V>::value),
-        void>::type
+    void
     deinit_mem(fht_chunk<K, V> * const ptr, const size_t size) const {
         mymunmap(ptr, size * sizeof(fht_chunk<K, V>));
     }
-
-    template<typename _K = K, typename _V = V>
-    typename std::enable_if<
-        (!(std::is_arithmetic<_K>::value || std::is_pointer<_K>::value)) ||
-            (!(std::is_arithmetic<_V>::value || std::is_pointer<_V>::value)),
-        fht_chunk<K, V> * const>::type
-    init_mem(const size_t size) const {
-        return new fht_chunk<K, V>[size];
-    }
-    template<typename _K = K, typename _V = V>
-    typename std::enable_if<
-        (!(std::is_arithmetic<_K>::value || std::is_pointer<_K>::value)) ||
-            (!(std::is_arithmetic<_V>::value || std::is_pointer<_V>::value)),
-        void>::type
-    deinit_mem(fht_chunk<K, V> * const ptr, const size_t size) const {
-        delete[] ptr;
-    }
 };
+
 
 #ifdef USING_LOCAL_MMAP
 #undef mymmap_alloc

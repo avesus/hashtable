@@ -5,15 +5,18 @@
             "-c",
             "-O3",
             "-std=c++11",
+            "-fipa-sra",
+            "-Winline",
             "-Wall",
             "-Wno-pointer-arith",
             "-Wno-unused-function",
             "-D_GNU_SOURCE",
-            "-I/home/noah/programs/seq_flat_ht/config",
-            "-I/home/noah/programs/seq_flat_ht/lib/include/",
+            "-I/home/noah/programs/fht_ht/config",
+            "-I/home/noah/programs/fht_ht/lib/include/",
+            "-march=native",
             "driver.c"
         ],
-        "directory": "/home/noah/programs/seq_flat_ht/main",
+        "directory": "/home/noah/programs/fht_ht/main",
         "file": "driver.c"
     },
     {
@@ -22,15 +25,18 @@
             "-c",
             "-O3",
             "-std=c++11",
+            "-fipa-sra",
+            "-Winline",
             "-Wall",
             "-Wno-pointer-arith",
             "-Wno-unused-function",
             "-D_GNU_SOURCE",
-            "-I/home/noah/programs/seq_flat_ht/config",
-            "-I/home/noah/programs/seq_flat_ht/lib/include/",
+            "-I/home/noah/programs/fht_ht/config",
+            "-I/home/noah/programs/fht_ht/lib/include/",
+            "-march=native",
             "src/helpers/arg.c"
         ],
-        "directory": "/home/noah/programs/seq_flat_ht/lib",
+        "directory": "/home/noah/programs/fht_ht/lib",
         "file": "src/helpers/arg.c"
     }
 ]

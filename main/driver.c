@@ -1,7 +1,7 @@
 #include "driver.h"
 #include <vector>
 
-#define INT_TEST
+#define INT_STR_TEST
 #define myfree free
 #define PRINT(V_LEVEL, ...)                                                    \
     {                                                                          \
@@ -166,9 +166,9 @@ udiv(uint64_t num, uint64_t den) {
     return ((double)num) / ((double)den);
 }
 
+#ifdef DEBUG
 static void correct_test();
-static void test_spread();
-
+#endif
 
 int
 main(int argc, char ** argv) {
@@ -184,10 +184,6 @@ main(int argc, char ** argv) {
     freeCommandLine();
     freeArgumentParser(ap);
 
-    if (fun_guess) {
-        test_spread();
-        return 0;
-    }
 
     // code goes here
     struct timespec start, end;
@@ -202,10 +198,19 @@ main(int argc, char ** argv) {
 #if defined INT_TEST || defined INT_STR_TEST
     test_node_t * test_nodes =
         (test_node_t *)calloc(FHT_TEST_SIZE, sizeof(test_node_t));
-
+#ifdef INT_STR_TEST
+    std::vector<std::string> str_vals;
+#endif
     for (uint32_t i = 0; i < FHT_TEST_SIZE; i++) {
         (test_nodes + i)->key = random();
         (test_nodes + i)->val = i;
+#ifdef INT_STR_TEST
+        std::string new_str_val = "";
+        for (uint32_t len = 0; len < 50; len++) {
+            new_str_val += (char)((rand() % 26) + 65);
+        }
+        str_vals.push_back(new_str_val);
+#endif
     }
 
     // init random keys (with varying degree of likely hood to be in table)
@@ -258,25 +263,20 @@ main(int argc, char ** argv) {
     if (which_table == OUR_TABLE) {
 #ifdef INT_TEST
 
-        fht_table<uint32_t,
-                  uint32_t,
-                  DEFAULT_RETURNER<uint32_t>,
-                  HASH_64_4<uint32_t>>
+        fht_table<uint32_t, uint32_t, DEFAULT_RETURNER<uint32_t>>
+
             table(1 << init_size);
 
 #elif defined INT_STR_TEST
-        fht_table<uint32_t,
-                  std::string,
-                  DEFAULT_RETURNER<std::string>,
-                  DEFAULT_HASH_32<uint32_t>>
-            table(1 << init_size);
+        fht_table<uint32_t, std::string, DEFAULT_RETURNER<std::string>> table(
+            1 << init_size);
 #elif defined TEST_TEST
         fht_table<test_type, test_type> table(1 << init_size);
 #else
         fht_table<std::string, std::string> table(1 << init_size);
 #endif
         // run perf test
-#ifdef INET_TEST
+#ifdef INeT_TEST
         for (uint32_t i = 0; i < FHT_TEST_SIZE; i++) {
             table.add((test_nodes + i)->key, (test_nodes + i)->val);
         }
@@ -295,7 +295,7 @@ main(int argc, char ** argv) {
 #elif defined INT_STR_TEST
             counter ^= table.add(
                 (test_nodes + i)->key,
-                "This is a pretty long string all other things being equal ");
+                "A string that can and should be constructed in place!");
 
 #elif defined TEST_TEST
             counter ^= table.add(test_type_key[i], test_type_val[i]);
@@ -380,6 +380,7 @@ main(int argc, char ** argv) {
 // basic correctness check. Should put table through enough cases that if
 // there is a bug it will catch it
 
+#ifdef DEBUG
 static void
 correct_test() {
 
@@ -819,3 +820,4 @@ test_spread() {
         }
     }
 }
+#endif

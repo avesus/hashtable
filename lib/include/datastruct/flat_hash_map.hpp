@@ -596,6 +596,7 @@ public:
     {
         return emplace(std::move(value));
     }
+    
     template<typename... Args>
     iterator emplace_hint(const_iterator, Args &&... args)
     {
